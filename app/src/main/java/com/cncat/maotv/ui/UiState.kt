@@ -285,7 +285,7 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
     // ───────────── 音量 ─────────────
 
     fun setVolumeAndFlash(v: Float) {
-        player.setVolume(v)
+        player.changeVolume(v)
         flashVolume()
     }
 
