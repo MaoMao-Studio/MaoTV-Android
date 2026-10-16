@@ -1,3 +1,5 @@
+import java.util.Properties
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -31,7 +33,7 @@ android {
     // 签名：优先用 GitHub Secrets 传进来的环境变量，其次用仓库里 signing/ 目录（由“生成签名密钥”工作流创建）。
     // 两者都没有就不签名（输出 unsigned APK，可以再用 MT 管理器签）。同时开启 V1 / V2 / V3 三种签名。
     val signingDir = rootProject.file("signing")
-    val signingProps = java.util.Properties().also { p ->
+    val signingProps = Properties().also { p ->
         val f = File(signingDir, "signing.properties")
         if (f.exists()) f.inputStream().use { p.load(it) }
     }
