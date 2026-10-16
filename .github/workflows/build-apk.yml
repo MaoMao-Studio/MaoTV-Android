@@ -1,5 +1,6 @@
-name: Build unsigned APK
+name: Build APK
 
+# 只在你手动点 “Run workflow” 时才编译（改文件、推送都不会自动编译）
 on:
   workflow_dispatch:
 
@@ -27,14 +28,33 @@ jobs:
         with:
           gradle-version: '8.9'
 
-      - name: Build release APKs (unsigned, one per ABI)
+      # 可选：如果在仓库 Secrets 里配置了 KEYSTORE_BASE64，就用它签名（优先于 signing/ 目录）
+      - name: Prepare keystore from secrets
+        env:
+          KS_B64: ${{ secrets.KEYSTORE_BASE64 }}
+        run: |
+          if [ -n "$KS_B64" ]; then
+            echo "$KS_B64" | base64 -d > "$RUNNER_TEMP/release.jks"
+            echo "KEYSTORE_FILE=$RUNNER_TEMP/release.jks" >> "$GITHUB_ENV"
+          fi
+
+      - name: Build release APK (arm64-v8a)
+        env:
+          KEYSTORE_PASSWORD: ${{ secrets.KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.KEY_PASSWORD }}
         run: gradle --no-daemon :app:assembleRelease
 
-      - name: List outputs
-        run: ls -la app/build/outputs/apk/release/
+      - name: Verify signature
+        run: |
+          ls -la app/build/outputs/apk/release/
+          for f in app/build/outputs/apk/release/*.apk; do
+            echo "== $f"
+            "$ANDROID_HOME/build-tools/34.0.0/apksigner" verify --verbose --print-certs "$f" || echo "(未签名或验证失败)"
+          done
 
       - uses: actions/upload-artifact@v4
         with:
-          name: MaoTV-unsigned-apk
+          name: MaoTV-apk
           path: app/build/outputs/apk/release/*.apk
           if-no-files-found: error
