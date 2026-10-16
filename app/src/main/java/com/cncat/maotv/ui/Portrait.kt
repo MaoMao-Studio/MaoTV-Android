@@ -275,3 +275,6 @@ fun PortraitEPGView(ui: UiState, insets: Insets) {
         Spacer(Modifier.height(insets.bottom))
     }
 }
+
+/** 分类行和频道行统一的行高（设计点） */
+private const val ROW_H = 54
