@@ -290,7 +290,7 @@ class PlayerController(private val model: AppModel) {
 
     // ───────────── 音量（应用内音量，0…1） ─────────────
 
-    fun setVolume(v: Float) {
+    fun changeVolume(v: Float) {
         val c = v.coerceIn(0f, 1f)
         volume = c
         engine.setVolume(c)
