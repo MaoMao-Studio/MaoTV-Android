@@ -186,7 +186,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         root.addView(pv, ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
 
         val sv = SubtitleView(context)
-        sv.setApplyEmbeddedStyles(true)
+        sv.setApplyEmbeddedStyles(false)
         sv.setApplyEmbeddedFontSizes(false)
         sv.setStyle(
             CaptionStyleCompat(
