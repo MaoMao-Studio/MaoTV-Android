@@ -166,7 +166,7 @@ class MaoHlsExtractorFactory(private val tsFlags: Int) : HlsExtractorFactory {
         val isTs = try { ts.sniff(sniffingExtractorInput) } catch (e: Exception) { false }
         sniffingExtractorInput.resetPeekPosition()
         if (isTs) {
-            return BundledHlsMediaChunkExtractor(ts, format, timestampAdjuster, SubtitleParser.Factory.UNSUPPORTED, false)
+            return BundledHlsMediaChunkExtractor(ts, format, timestampAdjuster)
         }
         return base.createExtractor(uri, format, muxedCaptionFormats, timestampAdjuster, responseHeaders, sniffingExtractorInput, playerId)
     }
