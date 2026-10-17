@@ -14,6 +14,7 @@ import android.view.ViewGroup
 import android.widget.FrameLayout
 import androidx.media3.common.AudioAttributes
 import androidx.media3.common.C
+import androidx.media3.common.MimeTypes
 import androidx.media3.common.Format
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
@@ -500,6 +501,18 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
             }
 
             val ex = error as? ExoPlaybackException
+            // 字幕渲染出错：只关掉字幕继续播，绝不当成解码失败（否则会不停重试 / 切软解）
+            if (ex != null && ex.type == ExoPlaybackException.TYPE_RENDERER &&
+                ex.rendererFormat?.sampleMimeType?.let { MimeTypes.isText(it) || it == MimeTypes.APPLICATION_MEDIA3_CUES } == true
+            ) {
+                trackSelector?.let { ts ->
+                    ts.setParameters(ts.buildUponParameters()
+                        .clearOverridesOfType(C.TRACK_TYPE_TEXT)
+                        .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true).build())
+                }
+                p.prepare()
+                return
+            }
             if (ex != null && ex.type == ExoPlaybackException.TYPE_RENDERER) {
                 // 单个轨道 / 解码器出错：带伤继续播，原地恢复，由控制器统计次数
                 if (cfg?.settings?.m3KeepPlaying == true) {
