@@ -102,7 +102,6 @@ fun PortraitBrowser(ui: UiState, modifier: Modifier = Modifier) {
                 val title = if (page == PortraitPage.CATEGORIES) "猫TV" else (model.categories.firstOrNull { it.id == catId }?.title ?: "")
                 Txt(title, 17, bold = true, align = TextAlign.Center, modifier = Modifier.layoutId("title"))
                 Row(Modifier.layoutId("right"), verticalAlignment = Alignment.CenterVertically) {
-                    HeaderIcon(if (player.isPaused) Ico.PLAY else Ico.PAUSE) { player.togglePause() }
                     HeaderIcon(Ico.WAVEFORM) { ui.openPopup(PopupKind.AUDIO) }
                     HeaderIcon(Ico.CAPTIONS) { ui.openPopup(PopupKind.SUBTITLE) }
                     HeaderIcon(Ico.GEAR) { ui.openSettings() }

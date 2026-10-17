@@ -41,6 +41,8 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
     var portrait by mutableStateOf(false)
     var inPip by mutableStateOf(false)
     /** 竖屏搜索框获得焦点时为 true：此时按键（含数字键）交给输入框，不当作遥控器操作 */
+    /** 暂停图标正在显示（含淡入 / 淡出动画期间） */
+    var pauseIconShown by mutableStateOf(false)
     var textInputActive by mutableStateOf(false)
 
     var menuVisible by mutableStateOf(false)

@@ -1,7 +1,9 @@
 package com.cncat.maotv.ui
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.slideInVertically
@@ -110,7 +112,7 @@ fun PlayerScreen(app: MaoApp, ui: UiState, applySystemBars: (portrait: Boolean, 
                 }
             }
             if (portrait && !pip) {
-                // 竖屏视频区：点一下显示换台信息（竖屏没有信息条，等同于无操作，保留以免误触选单）；上下滑换台、左右滑调音量
+                // 竖屏视频区：点一下 = 暂停 / 恢复；上下滑换台、左右滑调音量
                 Box(Modifier.fillMaxSize().gestures(ui, tapToggleMenu = false))
             }
         }
@@ -144,7 +146,8 @@ private fun androidx.compose.foundation.layout.BoxScope.LandscapeLayers(ui: UiSt
     // 手势层：点空白处弹出 / 收起选单；上下滑换台；左右滑调音量
     Box(Modifier.fillMaxSize().gestures(ui, tapToggleMenu = true))
 
-    StatusOverlay(player, 280.0)
+    StatusOverlay(player, 280.0, hold = ui.pauseIconShown)
+    PauseIndicator(ui, clickable = true, modifier = Modifier.align(Alignment.Center))
 
     // 底部 OSD 区：换台信息条 → 提示条 → 音量条（自下而上）
     BottomOsdStack(ui, widthFraction = 0.72f, maxWidthDp = 900, bottomPad = insets.bottom + u(18), showChannelInfo = true)
@@ -259,7 +262,8 @@ private fun PortraitLayers(ui: UiState, insets: Insets, width: androidx.compose.
 
     // 视频区内的状态 / OSD：只放音量条、提示条（竖屏不显示台号 + 频道名 + EPG 信息条）
     Box(Modifier.padding(top = insets.top).fillMaxWidth().height(videoH)) {
-        StatusOverlay(player, 200.0, compact = true)
+        StatusOverlay(player, 200.0, compact = true, hold = ui.pauseIconShown)
+        PauseIndicator(ui, clickable = false, modifier = Modifier.align(Alignment.Center))
         BottomOsdStack(ui, widthFraction = 1f, maxWidthDp = 2000, bottomPad = u(8), showChannelInfo = false, sidePad = u(8))
         if (ui.digits.isNotEmpty()) {
             Box(Modifier.align(Alignment.TopEnd).padding(top = u(10), end = u(10))) { NumberEntryCard(ui.digits) }
@@ -315,7 +319,7 @@ private fun androidx.compose.foundation.layout.BoxScope.BottomOsdStack(
 
 /** 缓冲 / 重试 / 失败提示 */
 @Composable
-private fun StatusOverlay(player: PlayerController, logoWidth: Double, compact: Boolean = false) {
+private fun StatusOverlay(player: PlayerController, logoWidth: Double, compact: Boolean = false, hold: Boolean = false) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         if (player.failed) {
             Column(
@@ -331,13 +335,13 @@ private fun StatusOverlay(player: PlayerController, logoWidth: Double, compact: 
                         .tap { player.reload() }.padding(horizontal = u(26), vertical = u(8)),
                 ) { Txt("重试", 15, weight = FontWeight.SemiBold) }
             }
-        } else if (player.isBuffering) {
+        } else if (player.isBuffering && !hold && !player.isPaused) {
             Box(
                 Modifier.fillMaxSize().then(if (!player.hasPicture) Modifier.background(Color.Black) else Modifier),
                 contentAlignment = Alignment.Center,
             ) {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(u(if (compact) 8 else 14))) {
-                    if (!player.hasPicture) {
+                    if (!player.hasPicture && !player.resuming) {
                         Image(
                             painterResource(R.drawable.logo_text), null,
                             modifier = Modifier.width(u(logoWidth)), contentScale = ContentScale.FillWidth,
@@ -345,7 +349,7 @@ private fun StatusOverlay(player: PlayerController, logoWidth: Double, compact: 
                     }
                     Spinner(if (compact) 22 else 30)
                     Txt(
-                        "${if (player.hasPicture) "缓冲中" else "频道加载中"}（${player.speedText}）…", 13,
+                        "${if (player.resuming) "正在恢复播放" else if (player.hasPicture) "缓冲中" else "频道加载中"}（${player.speedText}）…", 13,
                         color = Color.White.copy(alpha = 0.85f),
                     )
                     player.retryText?.let {
@@ -362,13 +366,47 @@ private fun StatusOverlay(player: PlayerController, logoWidth: Double, compact: 
 }
 
 /**
+ * 暂停图标：暂停时由大变小淡入（1.8 倍 → 1 倍），恢复时由小变大淡出（1 倍 → 1.8 倍）。
+ * 动画没结束前 ui.pauseIconShown 一直为 true，加载界面（“正在恢复播放…”）等它播完才出现。
+ * 横屏下点图标 = 恢复播放（竖屏由整个画面区域的点击处理）。
+ */
+@Composable
+private fun PauseIndicator(ui: UiState, clickable: Boolean, modifier: Modifier = Modifier) {
+    val paused = ui.player.isPaused
+    val prog = remember { Animatable(0f) }
+    LaunchedEffect(paused) {
+        if (paused) {
+            ui.pauseIconShown = true
+            prog.animateTo(1f, tween(240))
+        } else {
+            prog.animateTo(0f, tween(240))
+            ui.pauseIconShown = false
+        }
+    }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { ui.pauseIconShown = false } }
+    val p = prog.value
+    if (p > 0f) {
+        Box(
+            modifier.size(u(64))
+                .graphicsLayer {
+                    val sc = 1f + 0.8f * (1f - p)
+                    scaleX = sc; scaleY = sc; alpha = p
+                }
+                .clip(CircleShape).background(Color.Black.copy(alpha = 0.55f))
+                .then(if (clickable && paused) Modifier.tap { ui.player.togglePause() } else Modifier),
+            contentAlignment = Alignment.Center,
+        ) { Icon(Ico.PAUSE, u(26), Color.White) }
+    }
+}
+
+/**
  * 画面手势：点击（横屏切换选单）；上下滑换台（滑动 > 60px）；左右滑调音量（横扫半个宽度 = 100%）。
  */
 private fun Modifier.gestures(ui: UiState, tapToggleMenu: Boolean): Modifier = this
     .pointerInput(tapToggleMenu) {
         detectTapGestures {
             ui.remoteActive = false
-            if (tapToggleMenu) ui.toggleMenuByTap() else ui.showOSD()
+            if (tapToggleMenu) ui.toggleMenuByTap() else ui.player.togglePause()
         }
     }
     .pointerInput(Unit) {

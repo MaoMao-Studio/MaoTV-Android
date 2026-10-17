@@ -21,6 +21,13 @@ import androidx.media3.extractor.ts.ElementaryStreamReader
 import androidx.media3.extractor.ts.PesReader
 import androidx.media3.extractor.ts.TsExtractor
 import androidx.media3.extractor.ts.TsPayloadReader
+import androidx.media3.exoplayer.analytics.PlayerId
+import androidx.media3.exoplayer.hls.BundledHlsMediaChunkExtractor
+import androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory
+import androidx.media3.exoplayer.hls.HlsExtractorFactory
+import androidx.media3.exoplayer.hls.HlsMediaChunkExtractor
+import androidx.media3.extractor.ExtractorInput
+import androidx.media3.extractor.text.SubtitleParser
 
 /**
  * Media3 自带的 TS 解析器不认蓝光 PGS 字幕（PMT 里的流类型 0x90），所以 TS 直播流里的 PGS 轨道根本不会出现。
@@ -93,8 +100,8 @@ private class PgsTsReader(private val language: String?) : ElementaryStreamReade
 }
 
 /** 在默认的 TS 读取器基础上加上 PGS（流类型 0x90） */
-private class PgsAwareReaderFactory(flags: Int) : TsPayloadReader.Factory {
-    private val base = DefaultTsPayloadReaderFactory(flags)
+private class PgsAwareReaderFactory(flags: Int, captions: List<Format> = emptyList()) : TsPayloadReader.Factory {
+    private val base = DefaultTsPayloadReaderFactory(flags, captions)
 
     override fun createInitialPayloadReaders(): SparseArray<TsPayloadReader> = base.createInitialPayloadReaders()
 
@@ -126,4 +133,41 @@ class MaoExtractorsFactory(private val tsFlags: Int) : ExtractorsFactory {
                 )
             } else e
         }.toTypedArray()
+}
+
+
+/**
+ * HLS 用的提取器工厂：分片是 TS 时换成认识 PGS 的 TS 解析器（其余情况交给默认实现）。
+ * 配合关闭“无分片准备”，播放器才会从第一个分片里发现内嵌的字幕轨道。
+ */
+class MaoHlsExtractorFactory(private val tsFlags: Int) : HlsExtractorFactory {
+    private val base = DefaultHlsExtractorFactory(tsFlags, false)
+
+    override fun createExtractor(
+        uri: Uri,
+        format: Format,
+        muxedCaptionFormats: List<Format>?,
+        timestampAdjuster: TimestampAdjuster,
+        responseHeaders: Map<String, List<String>>,
+        sniffingExtractorInput: ExtractorInput,
+        playerId: PlayerId,
+    ): HlsMediaChunkExtractor {
+        var flags = DefaultTsPayloadReaderFactory.FLAG_IGNORE_SPLICE_INFO_STREAM or tsFlags
+        if (muxedCaptionFormats != null) flags = flags or DefaultTsPayloadReaderFactory.FLAG_OVERRIDE_CAPTION_DESCRIPTORS
+        val ts = TsExtractor(
+            TsExtractor.MODE_HLS,
+            TsExtractor.FLAG_EMIT_RAW_SUBTITLE_DATA,
+            SubtitleParser.Factory.UNSUPPORTED,
+            timestampAdjuster,
+            PgsAwareReaderFactory(flags, muxedCaptionFormats ?: emptyList()),
+            TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES,
+        )
+        sniffingExtractorInput.resetPeekPosition()
+        val isTs = try { ts.sniff(sniffingExtractorInput) } catch (e: Exception) { false }
+        sniffingExtractorInput.resetPeekPosition()
+        if (isTs) {
+            return BundledHlsMediaChunkExtractor(ts, format, timestampAdjuster, SubtitleParser.Factory.UNSUPPORTED, false)
+        }
+        return base.createExtractor(uri, format, muxedCaptionFormats, timestampAdjuster, responseHeaders, sniffingExtractorInput, playerId)
+    }
 }

@@ -113,6 +113,12 @@ class SettingsStore(context: Context) {
         get() = sp.getString("lastChannelURL", null)
         set(v) { sp.edit().putString("lastChannelURL", v).apply() }
 
+    /** 每个频道各自记住的音轨 / 字幕轨选择（按名称保存；字幕选“关闭”存 OFF_MARK） */
+    fun getTrackPick(kind: String, key: String): String? = sp.getString("pick_${kind}_$key", null)
+    fun setTrackPick(kind: String, key: String, name: String) {
+        sp.edit().putString("pick_${kind}_$key", name).apply()
+    }
+
     var lastCategoryId: String?
         get() = sp.getString("lastCategoryID", null)
         set(v) { sp.edit().putString("lastCategoryID", v).apply() }
@@ -124,4 +130,8 @@ class SettingsStore(context: Context) {
     var epgLastUpdate: Long
         get() = sp.getLong("epgLastUpdate", 0L)
         set(v) { sp.edit().putLong("epgLastUpdate", v).apply() }
+
+    companion object {
+        const val OFF_MARK = "__OFF__"
+    }
 }

@@ -31,7 +31,6 @@ import androidx.media3.exoplayer.DefaultRenderersFactory
 import androidx.media3.exoplayer.ExoPlaybackException
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.analytics.AnalyticsListener
-import androidx.media3.exoplayer.hls.DefaultHlsExtractorFactory
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.mediacodec.MediaCodecSelector
 import androidx.media3.exoplayer.rtsp.RtspMediaSource
@@ -284,9 +283,9 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         if (s.m3TsDetectAu) tsFlags = tsFlags or DefaultTsPayloadReaderFactory.FLAG_DETECT_ACCESS_UNITS
         return when (kind) {
             Kind.HLS -> HlsMediaSource.Factory(ds)
-                .setExtractorFactory(DefaultHlsExtractorFactory(tsFlags, false))
+                .setExtractorFactory(MaoHlsExtractorFactory(tsFlags))
                 .setLoadErrorHandlingPolicy(policy)
-                .setAllowChunklessPreparation(true)
+                .setAllowChunklessPreparation(false)
                 .createMediaSource(item)
             Kind.RTSP -> RtspMediaSource.Factory().createMediaSource(item)
             Kind.PROGRESSIVE -> ProgressiveMediaSource.Factory(
@@ -568,6 +567,13 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
 
         val sub = arrayListOf(DiagRow("字幕轨数", "${textRefs.size}"))
         sub.add(DiagRow("当前字幕", lastTracks.subtitles.firstOrNull { it.isOn }?.name ?: "关闭"))
+        // 列出播放器看到的所有字幕轨（含不支持的），方便排查
+        player?.currentTracks?.groups?.filter { it.type == C.TRACK_TYPE_TEXT }?.forEachIndexed { gi, g ->
+            for (i in 0 until g.length) {
+                val f = g.getTrackFormat(i)
+                sub.add(DiagRow("字幕${gi + 1}格式", "${f.sampleMimeType ?: "?"}${if (g.isTrackSupported(i)) "" else "（不支持）"}"))
+            }
+        }
         out.add(DiagSection("字幕", sub))
         return out
     }

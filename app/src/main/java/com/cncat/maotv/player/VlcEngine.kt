@@ -175,6 +175,8 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
         softwareDecode = config.softwareDecode
         cacheMillis = Math.round(config.settings.cacheSeconds * 1000).toInt()
         val seq = startSeq.incrementAndGet()
+        audioHints = emptyList()
+        fetchAudioHints(url, seq)
         val vlc = libVlc!!
         val hw = !softwareDecode
         val soft = softwareDecode
@@ -199,6 +201,8 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
                 if (soft) {
                     media.addOption(":codec=avcodec,all")
                     media.addOption(":avcodec-hw=none")
+                    // 软解 4K / 50 帧 HEVC 很吃力：允许非规范的加速手段（不认识的选项 VLC 会忽略）
+                    media.addOption(":avcodec-fast")
                 }
                 mp.media = media
                 media.release()
@@ -343,6 +347,54 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
         return try { mp.javaClass.getMethod(getter).invoke(mp)?.toString() } catch (e: Throwable) { null }
     }
 
+    private class AudioHint(val name: String, val lang: String)
+    @Volatile private var audioHints: List<AudioHint> = emptyList()
+
+    /** 读主播放列表里 #EXT-X-MEDIA:TYPE=AUDIO 的书写顺序（不是 m3u8 的就忽略），用来给音轨排序 */
+    private fun fetchAudioHints(url: String, seq: Int) {
+        if (!url.contains(".m3u8", ignoreCase = true)) return
+        Thread {
+            try {
+                val call = Http.callFactory.newCall(okhttp3.Request.Builder().url(url).build())
+                call.timeout().timeout(8, java.util.concurrent.TimeUnit.SECONDS)
+                val text = call.execute().use { r -> if (r.isSuccessful) r.body?.string().orEmpty() else "" }
+                val list = ArrayList<AudioHint>()
+                for (line in text.lineSequence()) {
+                    if (!line.startsWith("#EXT-X-MEDIA:")) continue
+                    val attrs = Regex("([A-Z0-9-]+)=(\"[^\"]*\"|[^,]*)").findAll(line.substringAfter(':'))
+                        .associate { it.groupValues[1] to it.groupValues[2].trim('"') }
+                    if (attrs["TYPE"] != "AUDIO") continue
+                    list.add(AudioHint((attrs["NAME"] ?: "").trim(), (attrs["LANGUAGE"] ?: "").trim()))
+                }
+                if (list.isNotEmpty() && seq == startSeq.get()) {
+                    audioHints = list
+                    mainHandler.post { if (seq == startSeq.get()) onEvent?.invoke(EngineEvent.TracksChanged) }
+                }
+            } catch (e: Throwable) {
+                Log.w(TAG, "读取音轨顺序失败", e)
+            }
+        }.start()
+    }
+
+    /** 先按轨道编号排，再按 m3u8 里 EXT-X-MEDIA 的顺序重排（名字或语言对得上的排在前面，对不上的保持原序放后面） */
+    private fun orderAudio(list: List<Entry>): List<Entry> {
+        val rest = list.sortedBy { it.id.toIntOrNull() ?: Int.MAX_VALUE }.toMutableList()
+        val hints = audioHints
+        if (hints.isEmpty()) return rest
+        val out = ArrayList<Entry>()
+        for (h in hints) {
+            val n = h.name.lowercase(Locale.ROOT)
+            var hit = if (n.isNotEmpty()) rest.firstOrNull { it.name.lowercase(Locale.ROOT).contains(n) } else null
+            if (hit == null && h.lang.isNotEmpty()) {
+                val l = h.lang.lowercase(Locale.ROOT)
+                hit = rest.firstOrNull { it.name.lowercase(Locale.ROOT).contains("[$l]") || it.name.lowercase(Locale.ROOT).contains(l) }
+            }
+            if (hit != null) { out.add(hit); rest.remove(hit) }
+        }
+        out.addAll(rest)
+        return out
+    }
+
     private var audioUserPicked = false
     private var audioEntries: List<Entry> = emptyList()
     private var subtitleEntries: List<Entry> = emptyList()
@@ -354,7 +406,7 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
         try {
             // 音轨（列表里 id = -1 的是“禁用”，不显示）
             // VLC 按“流出现的先后”给音轨排序，不一定是节目表里的顺序：按轨道编号从小到大重排
-            val audios = entries(mp.audioTracks).filter { !isDisabled(it.id) }.sortedBy { it.id.toIntOrNull() ?: Int.MAX_VALUE }
+            val audios = orderAudio(entries(mp.audioTracks).filter { !isDisabled(it.id) })
             audioEntries = audios
             if (applyDefaults && !audioUserPicked) {
                 // 没有手动选过音轨时，始终选第一条（后面的音轨晚出现时也会回到第一条）

@@ -15,6 +15,7 @@ import com.cncat.maotv.core.Channel
 import com.cncat.maotv.core.DiagRow
 import com.cncat.maotv.core.DiagSection
 import com.cncat.maotv.core.EngineKind
+import com.cncat.maotv.core.SettingsStore
 import com.cncat.maotv.core.SettingsValues
 import com.cncat.maotv.core.TrackItem
 import com.cncat.maotv.net.Http
@@ -71,6 +72,9 @@ class PlayerController(private val model: AppModel) {
     var stretchToFill by mutableStateOf(false)
         private set
     var isPaused by mutableStateOf(false)
+        private set
+    /** 刚从暂停恢复、还没出画面：加载界面显示“正在恢复播放” */
+    var resuming by mutableStateOf(false)
         private set
 
     /** 上下换台使用的频道列表（当前所在分类） */
@@ -139,6 +143,7 @@ class PlayerController(private val model: AppModel) {
         failed = false
         retryText = null
         isBuffering = true
+        resuming = false
         isPaused = false
         pausedAt = 0
         sessionSoftware = false
@@ -190,6 +195,7 @@ class PlayerController(private val model: AppModel) {
             isPaused = true
             pausedAt = SystemClock.elapsedRealtime()
             isBuffering = false
+            resuming = false
             retryText = null
             retryJob?.cancel(); retryJob = null
             engine.pause()
@@ -201,9 +207,12 @@ class PlayerController(private val model: AppModel) {
         pausedAt = 0
         if (pausedMs > maxOf(3000.0, store.values.cacheSeconds * 1000) || !hasPicture) {
             reload()
+            resuming = true
         } else {
             lastProgressAt = SystemClock.elapsedRealtime()
             lastMillis = -1
+            isBuffering = true
+            resuming = true
             engine.resume()
             notifyState()
         }
@@ -263,8 +272,21 @@ class PlayerController(private val model: AppModel) {
         healthySince = 0
     }
 
+    // 本频道记住的音轨 / 字幕轨选择（名称）；恢复成功后不再重复套用
+    private var savedAudio: String? = null
+    private var savedSub: String? = null
+    private var audioRestored = false
+    private var subRestored = false
+
+    private fun trackKey(): String? = current?.let { it.tvId.ifBlank { it.url } }
+
     private fun resetTrackState() {
-        userPickedSubtitle = false
+        val key = trackKey()
+        savedAudio = key?.let { store.getTrackPick("a", it) }
+        savedSub = key?.let { store.getTrackPick("s", it) }
+        audioRestored = savedAudio == null
+        subRestored = savedSub == null
+        userPickedSubtitle = savedSub == SettingsStore.OFF_MARK
         audioItems = emptyList()
         subtitleItems = emptyList()
         videoWidth = 0; videoHeight = 0; videoFps = 0f
@@ -284,6 +306,7 @@ class PlayerController(private val model: AppModel) {
         session = null
         target = null
         isBuffering = false
+        resuming = false
         for (e in engines.values) { e.onEvent = null; try { e.stop() } catch (_: Throwable) { } }
         notifyState()
         appContext.stopService(Intent(appContext, PlaybackService::class.java))
@@ -385,7 +408,7 @@ class PlayerController(private val model: AppModel) {
                     updateVideoGeometry()
                     notifyState()
                 }
-                if (isBuffering) isBuffering = false
+                if (isBuffering) { isBuffering = false; resuming = false }
                 loadingSince = 0
                 retryText = null
                 if (playingSince == 0L) playingSince = now
@@ -416,6 +439,7 @@ class PlayerController(private val model: AppModel) {
         if (retryCount > MAX_RETRIES) {
             failed = true
             isBuffering = false
+            resuming = false
             retryText = null
             engine.stop()
             notifyState()
@@ -538,12 +562,43 @@ class PlayerController(private val model: AppModel) {
     // ───────────── 音轨 / 字幕轨 ─────────────
 
     fun refreshTracks(applyDefaults: Boolean = false) {
-        val t = engine.refreshTracks(applyDefaults, userPickedSubtitle)
+        var t = engine.refreshTracks(applyDefaults, userPickedSubtitle)
+        if (applyDefaults) {
+            var changed = false
+            // 套用这个频道上次选的音轨（找不到就保持默认的第一条）
+            val sa = savedAudio
+            if (!audioRestored && sa != null) {
+                val i = t.audio.indexOfFirst { it.name == sa }
+                if (i >= 0) {
+                    audioRestored = true
+                    if (!t.audio[i].isOn) { engine.selectAudio(i); changed = true }
+                }
+            }
+            val ss = savedSub
+            if (!subRestored && ss != null) {
+                if (ss == SettingsStore.OFF_MARK) {
+                    if (t.subtitles.isNotEmpty()) {
+                        subRestored = true
+                        if (t.subtitles.any { it.isOn }) { engine.selectSubtitle(null); changed = true }
+                    }
+                } else {
+                    val i = t.subtitles.indexOfFirst { it.name == ss }
+                    if (i >= 0) {
+                        subRestored = true
+                        userPickedSubtitle = true
+                        if (!t.subtitles[i].isOn) { engine.selectSubtitle(i); changed = true }
+                    }
+                }
+            }
+            if (changed) t = engine.refreshTracks(false, userPickedSubtitle)
+        }
         if (t.audio != audioItems) audioItems = t.audio
         if (t.subtitles != subtitleItems) subtitleItems = t.subtitles
     }
 
     fun selectAudio(index: Int) {
+        audioRestored = true
+        trackKey()?.let { k -> audioItems.getOrNull(index)?.let { store.setTrackPick("a", k, it.name) } }
         engine.selectAudio(index)
         scope.launch {
             delay(300)
@@ -554,6 +609,10 @@ class PlayerController(private val model: AppModel) {
     /** index 为 null 表示关闭字幕 */
     fun selectSubtitle(index: Int?) {
         userPickedSubtitle = true
+        subRestored = true
+        trackKey()?.let { k ->
+            store.setTrackPick("s", k, if (index == null) SettingsStore.OFF_MARK else subtitleItems.getOrNull(index)?.name ?: return@let)
+        }
         engine.selectSubtitle(index)
         scope.launch {
             delay(150)
