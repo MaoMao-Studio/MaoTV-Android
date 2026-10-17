@@ -156,8 +156,8 @@ class MaoHlsExtractorFactory(private val tsFlags: Int) : HlsExtractorFactory {
         if (muxedCaptionFormats != null) flags = flags or DefaultTsPayloadReaderFactory.FLAG_OVERRIDE_CAPTION_DESCRIPTORS
         val ts = TsExtractor(
             TsExtractor.MODE_HLS,
-            TsExtractor.FLAG_EMIT_RAW_SUBTITLE_DATA,
-            SubtitleParser.Factory.UNSUPPORTED,
+            0,   // 提取阶段就把字幕解析成 Media3 的 cues（1.5 起渲染阶段不再解析原始 PGS，否则会报错）
+            DefaultSubtitleParserFactory(),
             timestampAdjuster,
             PgsAwareReaderFactory(flags, muxedCaptionFormats ?: emptyList()),
             TsExtractor.DEFAULT_TIMESTAMP_SEARCH_BYTES,
