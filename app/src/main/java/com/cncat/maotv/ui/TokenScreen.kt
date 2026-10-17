@@ -53,7 +53,10 @@ import com.cncat.maotv.core.Theme
 @Composable
 fun TokenScreen(model: AppModel) {
     // 和 iOS 一样按“点”（dp）计尺寸，不按屏幕长边缩放，这样手机竖屏 / 横屏看起来和 iOS 一致
-    androidx.compose.runtime.CompositionLocalProvider(LocalUnit provides androidx.compose.ui.platform.LocalDensity.current.density) {
+    // 按屏幕短边等比缩放（以 430 点宽的 iPhone 为基准），这样任何分辨率下看起来都和 iOS 一样、文字不会被挤成省略号
+    val cfg = androidx.compose.ui.platform.LocalConfiguration.current
+    val k = (minOf(cfg.screenWidthDp, cfg.screenHeightDp) / 430f).coerceIn(0.6f, 1.8f)
+    androidx.compose.runtime.CompositionLocalProvider(LocalUnit provides androidx.compose.ui.platform.LocalDensity.current.density * k) {
         TokenContent(model)
     }
 }
@@ -68,8 +71,8 @@ private fun TokenContent(model: AppModel) {
     // 进入页面时焦点自动落在输入框（并弹出键盘）
     LaunchedEffect(Unit) {
         // 等界面布局完成后再请求焦点（太早会失败）
-        repeat(5) {
-            kotlinx.coroutines.delay(150)
+        repeat(20) {
+            kotlinx.coroutines.delay(200)
             try { focusRequester.requestFocus(); keyboard?.show(); return@LaunchedEffect } catch (_: Throwable) { }
         }
     }
@@ -82,19 +85,19 @@ private fun TokenContent(model: AppModel) {
         val portrait = maxHeight > maxWidth
         val scroll = rememberScrollState()
         Box(
-            Modifier.fillMaxSize().verticalScroll(scroll).padding(u(24)),
+            Modifier.fillMaxSize().verticalScroll(scroll).padding(u(20)),
             contentAlignment = Alignment.Center,
         ) {
             val logo: @Composable () -> Unit = {
                 Image(
                     painterResource(R.drawable.logo), null,
-                    modifier = Modifier.width(u(if (isPad) 220 else 120)).shadow(u(12), RoundedCornerShape(u(28))).clip(RoundedCornerShape(u(28))),
+                    modifier = Modifier.width(u(105)).shadow(u(12), RoundedCornerShape(u(28))).clip(RoundedCornerShape(u(28))),
                     contentScale = ContentScale.FillWidth,
                 )
             }
             val form: @Composable () -> Unit = {
                 Column(Modifier.fillMaxWidth().widthIn(max = u(420)), verticalArrangement = Arrangement.spacedBy(u(14))) {
-                    Txt("欢迎使用猫TV！", 28, bold = true)
+                    Txt("欢迎使用猫TV！", 26, bold = true, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Visible)
                     var focused by remember { mutableStateOf(false) }
                     Box(
                         Modifier.fillMaxWidth()
