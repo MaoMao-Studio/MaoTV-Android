@@ -45,7 +45,7 @@ data class SettingsValues(
     val m3PrioritizeTime: Boolean = true,     // 优先按时间而不是内存大小控制缓冲
 ) {
     companion object {
-        const val DEFAULT_CACHE = 2.5
+        const val DEFAULT_CACHE = 5.0
         const val MIN_CACHE = 0.5
         const val MAX_CACHE = 15.0
     }
