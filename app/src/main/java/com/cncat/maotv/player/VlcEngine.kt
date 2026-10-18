@@ -191,8 +191,9 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
                 val media = Media(vlc, Uri.parse(url))
                 media.addOption(":network-caching=$cache")
                 media.addOption(":live-caching=$cache")
-                // 直播源丢包时尽量“带伤继续播”（不因连续计数错误而丢弃数据）
-                media.addOption(":no-ts-cc-check")
+                // 直播源抖动时“带伤继续播”：不做时钟抖动 / 同步修正（与 iOS 版一致；no-ts-cc-check 不能开）
+                media.addOption(":clock-jitter=0")
+                media.addOption(":clock-synchro=0")
                 // 不主动丢帧 / 跳帧（花屏时丢帧只会更卡）
                 media.addOption(":no-drop-late-frames")
                 media.addOption(":no-skip-frames")
