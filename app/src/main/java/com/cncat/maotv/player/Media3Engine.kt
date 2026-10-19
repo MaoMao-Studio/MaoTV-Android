@@ -473,11 +473,16 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
             val em = SubtitleStyle.LETTER_SPACING_PX / SubtitleStyle.SIZE_PX
             val out = cueGroup.cues.map { cue ->
                 val t = cue.text
-                if (t == null || t.isEmpty()) cue
+                if (t == null || t.isEmpty()) cue    // 位图字幕（PGS）保持自带的位置
                 else {
                     val sb = SpannableStringBuilder(t)
                     sb.setSpan(LetterSpacingSpan(em), 0, sb.length, SpannableStringBuilder.SPAN_INCLUSIVE_INCLUSIVE)
-                    cue.buildUpon().setText(sb).build()
+                    // 文字字幕（WebVTT 等）常自带“贴底”的行位置，会让“距底部 5%”不生效：清掉，统一由字幕层按固定高度显示
+                    cue.buildUpon().setText(sb)
+                        .setLine(Cue.DIMEN_UNSET, Cue.TYPE_UNSET).setLineAnchor(Cue.TYPE_UNSET)
+                        .setPosition(Cue.DIMEN_UNSET).setPositionAnchor(Cue.TYPE_UNSET)
+                        .setTextAlignment(android.text.Layout.Alignment.ALIGN_CENTER)
+                        .build()
                 }
             }
             sv.setCues(out)
