@@ -43,10 +43,11 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
     /** 把字库从 assets 复制到应用目录（libVLC 只能读真实文件路径） */
     private fun fontPath(): String? {
         return try {
-            val out = File(appContext.filesDir, "aura.ttf")
+            File(appContext.filesDir, "aura.ttf").delete()   // 清掉旧版字库副本
+            val out = File(appContext.filesDir, "auratv.ttf")
             val len = appContext.assets.openFd(SubtitleStyle.FONT_ASSET).use { it.length }
             if (!out.exists() || out.length() != len) {
-                val tmp = File(appContext.filesDir, "aura.ttf.tmp")
+                val tmp = File(appContext.filesDir, "auratv.ttf.tmp")
                 appContext.assets.open(SubtitleStyle.FONT_ASSET).use { i -> tmp.outputStream().use { o -> i.copyTo(o) } }
                 out.delete()
                 if (!tmp.renameTo(out)) return null
