@@ -143,6 +143,19 @@ class MaoExtractorsFactory(private val tsFlags: Int) : ExtractorsFactory {
 class MaoHlsExtractorFactory(private val tsFlags: Int) : HlsExtractorFactory {
     private val base = DefaultHlsExtractorFactory(tsFlags, false)
 
+    // 字幕相关设置交给默认实现：WebVTT 等必须在提取阶段解析成 cues，否则渲染器会报错 → “网络错误，正在重试”
+    override fun setSubtitleParserFactory(subtitleParserFactory: SubtitleParser.Factory): HlsExtractorFactory {
+        base.setSubtitleParserFactory(subtitleParserFactory)
+        return this
+    }
+
+    override fun experimentalParseSubtitlesDuringExtraction(parseSubtitlesDuringExtraction: Boolean): HlsExtractorFactory {
+        base.experimentalParseSubtitlesDuringExtraction(parseSubtitlesDuringExtraction)
+        return this
+    }
+
+    override fun getOutputTextFormat(sourceFormat: Format): Format = base.getOutputTextFormat(sourceFormat)
+
     override fun createExtractor(
         uri: Uri,
         format: Format,

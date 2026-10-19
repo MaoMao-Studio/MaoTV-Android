@@ -287,6 +287,8 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
                 .setExtractorFactory(MaoHlsExtractorFactory(tsFlags))
                 .setLoadErrorHandlingPolicy(policy)
                 .setAllowChunklessPreparation(false)
+                // WebVTT / PGS 等字幕在提取阶段就解析成 cues（1.5 的渲染器默认不再解析原始字幕，否则抛异常导致不断重试）
+                .experimentalParseSubtitlesDuringExtraction(true)
                 .createMediaSource(item)
             Kind.RTSP -> RtspMediaSource.Factory().createMediaSource(item)
             Kind.PROGRESSIVE -> ProgressiveMediaSource.Factory(

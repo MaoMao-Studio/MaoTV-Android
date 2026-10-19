@@ -76,7 +76,7 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
         full.add("--freetype-color=16777215")
         // VLC 的字幕边距单位是“视频自己的像素”（和分辨率有关）：IPTV 以 720p 居多，按 720 高度的 5% 取值，
         // 避免低分辨率频道里字幕偏高
-        full.add("--sub-margin=${Math.round(SubtitleStyle.BOTTOM_FRACTION * 720)}")
+        full.add("--sub-margin=${Math.round(SubtitleStyle.VLC_BOTTOM_FRACTION * 720)}")
 
         var vlc: LibVLC? = try {
             LibVLC(appContext, full)
@@ -508,6 +508,8 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
         val sub = arrayListOf(DiagRow("字幕轨数", "${subtitleEntries.size}"))
         val on = lastTracks.subtitles.firstOrNull { it.isOn }
         sub.add(DiagRow("当前字幕", on?.name ?: "关闭"))
+        val ff = File(appContext.filesDir, "auratv.ttf")
+        sub.add(DiagRow("字幕字体文件", if (ff.exists()) "已就绪（${ff.length() / 1024} KB）" else "未找到（用系统字体）"))
         out.add(DiagSection("字幕", sub))
         return out
     }
