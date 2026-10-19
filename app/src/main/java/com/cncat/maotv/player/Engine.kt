@@ -79,5 +79,5 @@ object SubtitleStyle {
     const val OUTLINE_PX = 5f                // 描边宽度
     const val LETTER_SPACING_PX = 8f         // 字距
     const val BOTTOM_FRACTION = 59f / 1080f  // 距底部：1080 高度下 59px（原 5% = 54px，再上移 5px）
-    const val FONT_ASSET = "fonts/auratv.ttf"
+    const val FONT_ASSET = "fonts/AuraTV.ttf"
 }
