@@ -79,6 +79,6 @@ object SubtitleStyle {
     const val OUTLINE_PX = 5f                // 描边宽度
     const val LETTER_SPACING_PX = 8f         // 字距
     const val BOTTOM_FRACTION = 59f / 1080f  // 距底部：1080 高度下 59px（原 5% = 54px，再上移 5px）
-    const val VLC_BOTTOM_FRACTION = 47f / 1080f  // VLC 字幕比 Media3 再低 12px（两者的计算方式不同，实测 VLC 偏高）
+    const val VLC_BOTTOM_FRACTION = 25f / 1080f  // 仅用于 VLC 的 --sub-margin（它在自身字幕行高之外再加这段边距）：实测 47 仍偏高，降到 25
     const val FONT_ASSET = "fonts/AuraTV.ttf"
 }
