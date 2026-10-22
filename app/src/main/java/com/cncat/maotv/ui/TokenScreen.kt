@@ -96,7 +96,7 @@ private fun TokenContent(model: AppModel) {
                 )
             }
             val form: @Composable () -> Unit = {
-                Column(Modifier.fillMaxWidth().widthIn(max = u(420)), verticalArrangement = Arrangement.spacedBy(u(14))) {
+                Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(u(14))) {
                     Txt("欢迎使用猫TV！", 26, bold = true, softWrap = false, overflow = androidx.compose.ui.text.style.TextOverflow.Visible)
                     var focused by remember { mutableStateOf(false) }
                     Box(
@@ -150,7 +150,14 @@ private fun TokenContent(model: AppModel) {
                 }
             }
             // 和 iOS 一致：横竖屏都是 左边 Logo、右边输入区
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(u(36))) {
+            // 横屏：内容区宽度约为屏幕的 70%，但不小于 u(470)（保证任何文字不出现省略号）、也不超过屏幕可用宽度
+            val avail = maxWidth - u(40)
+            val contentW = if (portrait) avail else maxOf(maxWidth * 0.7f, minOf(u(470), avail)).coerceAtMost(avail)
+            Row(
+                Modifier.width(contentW),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(u(36)),
+            ) {
                 logo(); Box(Modifier.weight(1f)) { form() }
             }
         }
