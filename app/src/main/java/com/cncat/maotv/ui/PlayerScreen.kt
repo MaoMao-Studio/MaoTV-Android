@@ -146,7 +146,7 @@ private fun androidx.compose.foundation.layout.BoxScope.LandscapeLayers(ui: UiSt
     // 手势层：点空白处弹出 / 收起选单；上下滑换台；左右滑调音量
     Box(Modifier.fillMaxSize().gestures(ui, tapToggleMenu = true))
 
-    StatusOverlay(player, 280.0, hold = ui.pauseIconShown)
+    StatusOverlay(player, 280.0, hold = ui.pauseIconShown, retryFocused = ui.remoteActive && !ui.menuVisible)
     PauseIndicator(ui, clickable = true, modifier = Modifier.align(Alignment.Center))
 
     // 底部 OSD 区：换台信息条 → 提示条 → 音量条（自下而上）
@@ -193,7 +193,7 @@ private fun MenuPanel(ui: UiState, insets: Insets) {
     val listW = u(LIST_W)
     val epgW = u(EPG_W)
     val hidden = -(insets.left + sidebarW + listW + handleW + epgW + 40.dp)
-    val offsetX by animateDpAsState(if (ui.menuVisible) 0.dp else hidden, SLIDE, label = "menu")
+    val offsetX by animateDpAsState(if (ui.menuVisible && !ui.buttonsOnly) 0.dp else hidden, SLIDE, label = "menu")
     val epgWidth by animateDpAsState(if (ui.epgOpen) epgW else 0.dp, SLIDE, label = "epg")
     val favSel = ui.selectedCategoryId == Category.FAVORITES_ID
 
@@ -213,7 +213,7 @@ private fun MenuPanel(ui: UiState, insets: Insets) {
             }
             ChannelList(
                 ui, list, player.current?.id, "${ui.selectedCategoryId}#${ui.menuShowCount}",
-                menuOpen = ui.menuVisible, reorderable = favSel, rowHeight = ListMetrics.ROW_HEIGHT, gold = favSel,
+                menuOpen = ui.menuVisible && !ui.buttonsOnly, reorderable = favSel, rowHeight = ListMetrics.ROW_HEIGHT, gold = favSel,
                 focusIndex = if (ui.remoteActive && ui.menuVisible && (ui.zone == Zone.CHANNEL || ui.zone == Zone.STAR)) ui.chFocus else -1,
                 starFocus = ui.remoteActive && ui.zone == Zone.STAR,
                 emptyText = "这里还没有频道\n在频道右侧点星标即可收藏",
@@ -262,7 +262,7 @@ private fun PortraitLayers(ui: UiState, insets: Insets, width: androidx.compose.
 
     // 视频区内的状态 / OSD：只放音量条、提示条（竖屏不显示台号 + 频道名 + EPG 信息条）
     Box(Modifier.padding(top = insets.top).fillMaxWidth().height(videoH)) {
-        StatusOverlay(player, 200.0, compact = true, hold = ui.pauseIconShown)
+        StatusOverlay(player, 200.0, compact = true, hold = ui.pauseIconShown, retryFocused = ui.remoteActive && !ui.menuVisible)
         PauseIndicator(ui, clickable = false, modifier = Modifier.align(Alignment.Center))
         BottomOsdStack(ui, widthFraction = 1f, maxWidthDp = 2000, bottomPad = u(8), showChannelInfo = false, sidePad = u(8))
         if (ui.digits.isNotEmpty()) {
@@ -319,7 +319,7 @@ private fun androidx.compose.foundation.layout.BoxScope.BottomOsdStack(
 
 /** 缓冲 / 重试 / 失败提示 */
 @Composable
-private fun StatusOverlay(player: PlayerController, logoWidth: Double, compact: Boolean = false, hold: Boolean = false) {
+private fun StatusOverlay(player: PlayerController, logoWidth: Double, compact: Boolean = false, hold: Boolean = false, retryFocused: Boolean = false) {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         if (player.failed) {
             Column(
@@ -332,6 +332,7 @@ private fun StatusOverlay(player: PlayerController, logoWidth: Double, compact: 
                 Txt("已重试 ${PlayerController.MAX_RETRIES} 次仍无法播放", 12, color = Color.White.copy(alpha = 0.6f))
                 Box(
                     Modifier.clip(RoundedCornerShape(50)).background(Theme.purpleA)
+                        .then(if (retryFocused) Modifier.border(u(2), Color.White, RoundedCornerShape(50)) else Modifier)
                         .tap { player.reload() }.padding(horizontal = u(26), vertical = u(8)),
                 ) { Txt("重试", 15, weight = FontWeight.SemiBold) }
             }
