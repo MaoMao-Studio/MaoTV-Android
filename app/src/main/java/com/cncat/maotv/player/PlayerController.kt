@@ -640,6 +640,12 @@ class PlayerController(private val model: AppModel) {
         )
         play.addAll(engine.statusRows())
         out.add(DiagSection("播放状态", play))
+        val keys = com.cncat.maotv.core.KeyLog.lines()
+        val keyRows = ArrayList<DiagRow>()
+        keyRows.add(DiagRow("返回回调次数", "${com.cncat.maotv.core.KeyLog.backCallbacks}"))
+        if (keys.isEmpty()) keyRows.add(DiagRow("最近按键", "（还没有）"))
+        else keys.forEachIndexed { i, l -> keyRows.add(DiagRow(if (i == 0) "最近按键" else "更早 $i", l)) }
+        out.add(DiagSection("按键记录", keyRows))
         return out
     }
 
