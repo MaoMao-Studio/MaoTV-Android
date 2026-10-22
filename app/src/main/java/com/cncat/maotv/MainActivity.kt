@@ -49,7 +49,6 @@ class MainActivity : ComponentActivity() {
 
         onBackPressedDispatcher.addCallback(this, object : OnBackPressedCallback(true) {
             override fun handleOnBackPressed() {
-                com.cncat.maotv.core.KeyLog.backCallbacks++
                 if (app.model.phase == Phase.READY && !ui.inPip) ui.onBack() else exitApp()
             }
         })
@@ -74,12 +73,6 @@ class MainActivity : ComponentActivity() {
 
     /** 遥控器按键统一在这里转交给 UiState（不依赖 Compose 焦点）；返回键由 OnBackPressedCallback 处理 */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
-        com.cncat.maotv.core.KeyLog.record(event)
-        // 有些遥控器的“返回”不是 KEYCODE_BACK（Esc / B 键 / 未映射的 KEY_BACK 扫描码）：按返回处理
-        if (com.cncat.maotv.core.KeyLog.isBackLike(event)) {
-            if (event.action == KeyEvent.ACTION_DOWN && event.repeatCount == 0) onBackPressedDispatcher.onBackPressed()
-            return true
-        }
         if (event.keyCode != KeyEvent.KEYCODE_BACK && ui.onKey(event)) return true
         return super.dispatchKeyEvent(event)
     }
