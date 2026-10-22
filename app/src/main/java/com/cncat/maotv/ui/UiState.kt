@@ -48,6 +48,8 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
     var menuVisible by mutableStateOf(false)
     /** 遥控器菜单键：只显示右下角控制按钮和时钟，不弹出左侧选单 */
     var buttonsOnly by mutableStateOf(false)
+    /** 右下角控制按钮是否显示：触摸 / 鼠标点击呼出选单时显示；遥控器确定键 / 键盘呼出时不显示（焦点也移不过去） */
+    var buttonsShown by mutableStateOf(true)
         private set
     var epgOpen by mutableStateOf(false)
     var selectedCategoryId by mutableStateOf(Category.ALL_ID)
@@ -178,11 +180,11 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
 
     fun toggleMenuByTap() {
         remoteActive = false
-        if (menuVisible) hideMenu() else showMenu()
+        if (menuVisible) hideMenu() else showMenu(touch = true)
     }
 
     /** 呼出选单。如果 OSD 正在显示（或正在收起），先让 OSD 收起，再展开选单。 */
-    fun showMenu(focusButtons: Boolean = false, buttonsOnly: Boolean = false) {
+    fun showMenu(focusButtons: Boolean = false, buttonsOnly: Boolean = false, touch: Boolean = false) {
         if (portrait) return
         transitionJob?.cancel()
         val mustWait = osdVisible || osdClosing
@@ -191,12 +193,13 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
             if (mustWait) {
                 delay(SLIDE_WAIT)
             }
-            presentMenu(focusButtons, buttonsOnly)
+            presentMenu(focusButtons, buttonsOnly, touch)
         }
     }
 
-    private fun presentMenu(focusButtons: Boolean, only: Boolean) {
+    private fun presentMenu(focusButtons: Boolean, only: Boolean, touch: Boolean) {
         buttonsOnly = only
+        buttonsShown = touch || focusButtons || only
         menuShowCount++
         menuClosing = false
         menuVisible = true
@@ -244,6 +247,7 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
 
     fun onTouchActivity() {
         remoteActive = false
+        if (menuVisible) buttonsShown = true
         bumpHideTimer()
     }
 
@@ -545,7 +549,7 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
 
     private fun onLongOk() {
         if (digits.isNotEmpty() || sslConfirm || settingsVisible || diagVisible || popup != null || portrait) return
-        if (menuVisible) { if (!buttonsOnly) { zone = Zone.BUTTON; btnFocus = 1 }; bumpHideTimer() } else showMenu(focusButtons = true)
+        if (menuVisible) { if (!buttonsOnly) { buttonsShown = true; zone = Zone.BUTTON; btnFocus = 1 }; bumpHideTimer() } else showMenu(focusButtons = true)
     }
 
     // —— 只有画面时 ——
@@ -596,7 +600,7 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
         val cats = categories
         when (code) {
             KeyEvent.KEYCODE_MENU -> {
-                if (zone == Zone.BUTTON) zone = Zone.CHANNEL else { zone = Zone.BUTTON; btnFocus = 1 }
+                if (buttonsShown && zone == Zone.BUTTON) zone = Zone.CHANNEL else { buttonsShown = true; zone = Zone.BUTTON; btnFocus = 1 }
             }
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (repeat == 0) player.togglePause()
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN,
@@ -631,13 +635,13 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
                 Zone.CHANNEL -> zone = Zone.CATEGORY
                 Zone.STAR -> zone = Zone.CHANNEL
                 Zone.HANDLE -> zone = Zone.STAR
-                Zone.EPG -> zone = Zone.HANDLE
+                Zone.EPG -> { epgOpen = false; zone = Zone.STAR }      // 遥控器 / 键盘：左键直接收起节目单
                 Zone.BUTTON -> btnFocus = (btnFocus - 1).coerceAtLeast(0)
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> when (zone) {
                 Zone.CATEGORY -> zone = Zone.CHANNEL
                 Zone.CHANNEL -> zone = Zone.STAR
-                Zone.STAR -> zone = Zone.HANDLE
+                Zone.STAR -> { epgOpen = true; zone = Zone.EPG }       // 遥控器 / 键盘：右键直接呼出节目单（不再停在“节目单”把手列）
                 Zone.HANDLE -> { epgOpen = true; zone = Zone.EPG }
                 Zone.EPG -> {}
                 Zone.BUTTON -> btnFocus = (btnFocus + 1).coerceAtMost(BUTTON_COUNT - 1)
