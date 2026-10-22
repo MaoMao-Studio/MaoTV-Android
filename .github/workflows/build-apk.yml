@@ -6,7 +6,8 @@ on:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # 本地 Mac mini 自托管 Runner（MaoMaoGe-MacMini）
+    runs-on: [self-hosted, macOS]
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v4
@@ -16,13 +17,32 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      # ubuntu-latest 已预装 Android SDK（ANDROID_HOME），这里只补装需要的版本
-      - name: Install SDK packages
+      # 自托管 Mac 上不一定预装 Android SDK：找不到就装到 ~/android-sdk（只第一次下载，之后复用）
+      - name: Prepare Android SDK
         run: |
-          SDKM="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
-          [ -x "$SDKM" ] || SDKM="$(ls -d $ANDROID_HOME/cmdline-tools/*/bin/sdkmanager | head -n1)"
-          yes | "$SDKM" --licenses > /dev/null || true
-          "$SDKM" "platforms;android-35" "build-tools;34.0.0"
+          SDK="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+          if [ -z "$SDK" ] || [ ! -d "$SDK" ]; then
+            for d in "$HOME/Library/Android/sdk" "$HOME/android-sdk"; do
+              [ -d "$d" ] && SDK="$d" && break
+            done
+          fi
+          [ -n "$SDK" ] || SDK="$HOME/android-sdk"
+          mkdir -p "$SDK"
+          SDKM="$(ls "$SDK"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | head -n1 || true)"
+          if [ -z "$SDKM" ]; then
+            echo "下载 Android 命令行工具…"
+            curl -fL -o "$RUNNER_TEMP/cmdline-tools.zip" https://dl.google.com/android/repository/commandlinetools-mac-11076708_latest.zip
+            rm -rf "$RUNNER_TEMP/cmdtools" && mkdir -p "$RUNNER_TEMP/cmdtools"
+            unzip -q "$RUNNER_TEMP/cmdline-tools.zip" -d "$RUNNER_TEMP/cmdtools"
+            mkdir -p "$SDK/cmdline-tools"
+            rm -rf "$SDK/cmdline-tools/latest"
+            mv "$RUNNER_TEMP/cmdtools/cmdline-tools" "$SDK/cmdline-tools/latest"
+            SDKM="$SDK/cmdline-tools/latest/bin/sdkmanager"
+          fi
+          yes | "$SDKM" --sdk_root="$SDK" --licenses > /dev/null || true
+          "$SDKM" --sdk_root="$SDK" "platforms;android-35" "build-tools;34.0.0"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
 
       - uses: gradle/actions/setup-gradle@v4
         with:
