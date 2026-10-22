@@ -83,6 +83,7 @@ private fun TokenContent(model: AppModel) {
             .imePadding()
     ) {
         val portrait = maxHeight > maxWidth
+        val screenW = maxWidth
         val scroll = rememberScrollState()
         Box(
             Modifier.fillMaxSize().verticalScroll(scroll).padding(u(20)),
@@ -151,8 +152,8 @@ private fun TokenContent(model: AppModel) {
             }
             // 和 iOS 一致：横竖屏都是 左边 Logo、右边输入区
             // 横屏：内容区宽度约为屏幕的 70%，但不小于 u(470)（保证任何文字不出现省略号）、也不超过屏幕可用宽度
-            val avail = maxWidth - u(40)
-            val contentW = if (portrait) avail else maxOf(maxWidth * 0.7f, minOf(u(470), avail)).coerceAtMost(avail)
+            val avail = screenW - u(40)
+            val contentW = if (portrait) avail else maxOf(screenW * 0.7f, minOf(u(470), avail)).coerceAtMost(avail)
             Row(
                 Modifier.width(contentW),
                 verticalAlignment = Alignment.CenterVertically,
