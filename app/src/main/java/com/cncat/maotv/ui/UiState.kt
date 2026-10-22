@@ -46,6 +46,8 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
     var textInputActive by mutableStateOf(false)
 
     var menuVisible by mutableStateOf(false)
+    /** 遥控器菜单键：只显示右下角控制按钮和时钟，不弹出左侧选单 */
+    var buttonsOnly by mutableStateOf(false)
         private set
     var epgOpen by mutableStateOf(false)
     var selectedCategoryId by mutableStateOf(Category.ALL_ID)
@@ -180,7 +182,7 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
     }
 
     /** 呼出选单。如果 OSD 正在显示（或正在收起），先让 OSD 收起，再展开选单。 */
-    fun showMenu(focusButtons: Boolean = false) {
+    fun showMenu(focusButtons: Boolean = false, buttonsOnly: Boolean = false) {
         if (portrait) return
         transitionJob?.cancel()
         val mustWait = osdVisible || osdClosing
@@ -189,18 +191,19 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
             if (mustWait) {
                 delay(SLIDE_WAIT)
             }
-            presentMenu(focusButtons)
+            presentMenu(focusButtons, buttonsOnly)
         }
     }
 
-    private fun presentMenu(focusButtons: Boolean) {
+    private fun presentMenu(focusButtons: Boolean, only: Boolean) {
+        buttonsOnly = only
         menuShowCount++
         menuClosing = false
         menuVisible = true
         popup = null
         val list = channelsInSelected()
         chFocus = list.indexOfFirst { it.id == player.current?.id }.coerceAtLeast(0)
-        if (focusButtons) { zone = Zone.BUTTON; btnFocus = 1 } else zone = Zone.CHANNEL
+        if (focusButtons || only) { zone = Zone.BUTTON; btnFocus = 1 } else zone = Zone.CHANNEL
         player.refreshTracks()
         bumpHideTimer()
     }
@@ -517,7 +520,8 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
             diagVisible -> diagKeys(code)
             popup != null -> popupKeys(code)
             portrait -> videoKeys(code, repeat)
-            menuVisible -> menuKeys(code, repeat)
+            menuVisible -> if (buttonsOnly) buttonsKeys(code, repeat) else menuKeys(code, repeat)
+            player.failed -> failedKeys(code, repeat)
             else -> videoKeys(code, repeat)
         }
     }
@@ -534,13 +538,14 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
             popup != null -> popup?.let { choosePopup(it, popupFocus) }
             portrait -> {}
             menuVisible -> menuOk()
+            player.failed -> player.reload()
             else -> showMenu()
         }
     }
 
     private fun onLongOk() {
         if (digits.isNotEmpty() || sslConfirm || settingsVisible || diagVisible || popup != null || portrait) return
-        if (menuVisible) { zone = Zone.BUTTON; btnFocus = 1; bumpHideTimer() } else showMenu(focusButtons = true)
+        if (menuVisible) { if (!buttonsOnly) { zone = Zone.BUTTON; btnFocus = 1 }; bumpHideTimer() } else showMenu(focusButtons = true)
     }
 
     // —— 只有画面时 ——
@@ -553,11 +558,34 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
             KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_UP -> if (repeat == 0) step(-1)
             KeyEvent.KEYCODE_DPAD_LEFT -> adjustVolume(-0.05f)
             KeyEvent.KEYCODE_DPAD_RIGHT -> adjustVolume(0.05f)
-            KeyEvent.KEYCODE_MENU -> if (!portrait) showMenu(focusButtons = true)
+            KeyEvent.KEYCODE_MENU -> if (!portrait) showMenu(buttonsOnly = true)
             KeyEvent.KEYCODE_INFO -> showOSD()
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (repeat == 0) player.togglePause()
             KeyEvent.KEYCODE_MEDIA_PLAY -> if (player.isPaused) player.togglePause()
             KeyEvent.KEYCODE_MEDIA_PAUSE -> if (!player.isPaused) player.togglePause()
+        }
+    }
+
+    /** 播放失败界面：焦点在“重试”按钮上；方向键在按钮间选择（目前仅一个），确定键 = 点击；上下仍可换台 */
+    private fun failedKeys(code: Int, repeat: Int) {
+        when (code) {
+            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {}
+            else -> videoKeys(code, repeat)
+        }
+    }
+
+    /** 仅按钮模式（遥控器菜单键）：左右选按钮，确定点击，菜单键收起，上下换台 */
+    private fun buttonsKeys(code: Int, repeat: Int) {
+        bumpHideTimer()
+        when (code) {
+            KeyEvent.KEYCODE_MENU -> hideMenu()
+            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (repeat == 0) player.togglePause()
+            KeyEvent.KEYCODE_DPAD_LEFT -> btnFocus = (btnFocus - 1).coerceAtLeast(0)
+            KeyEvent.KEYCODE_DPAD_RIGHT -> btnFocus = (btnFocus + 1).coerceAtMost(BUTTON_COUNT - 1)
+            KeyEvent.KEYCODE_DPAD_UP -> if (repeat == 0) stepByDirection(towardsNext = false)
+            KeyEvent.KEYCODE_DPAD_DOWN -> if (repeat == 0) stepByDirection(towardsNext = true)
+            KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_DOWN -> if (repeat == 0) step(1)
+            KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_UP -> if (repeat == 0) step(-1)
         }
     }
 
