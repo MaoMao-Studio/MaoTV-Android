@@ -177,6 +177,7 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
         cacheMillis = Math.round(config.settings.cacheSeconds * 1000).toInt()
         val seq = startSeq.incrementAndGet()
         audioHints = emptyList()
+        subtitleHints = emptyList()
         fetchAudioHints(url, seq)
         val vlc = libVlc!!
         val hw = !softwareDecode
@@ -351,6 +352,7 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
 
     private class AudioHint(val name: String, val lang: String)
     @Volatile private var audioHints: List<AudioHint> = emptyList()
+    @Volatile private var subtitleHints: List<AudioHint> = emptyList()
 
     /** 读主播放列表里 #EXT-X-MEDIA:TYPE=AUDIO 的书写顺序（不是 m3u8 的就忽略），用来给音轨排序 */
     private fun fetchAudioHints(url: String, seq: Int) {
@@ -361,15 +363,20 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
                 call.timeout().timeout(8, java.util.concurrent.TimeUnit.SECONDS)
                 val text = call.execute().use { r -> if (r.isSuccessful) r.body?.string().orEmpty() else "" }
                 val list = ArrayList<AudioHint>()
+                val subList = ArrayList<AudioHint>()
                 for (line in text.lineSequence()) {
                     if (!line.startsWith("#EXT-X-MEDIA:")) continue
                     val attrs = Regex("([A-Z0-9-]+)=(\"[^\"]*\"|[^,]*)").findAll(line.substringAfter(':'))
                         .associate { it.groupValues[1] to it.groupValues[2].trim('"') }
-                    if (attrs["TYPE"] != "AUDIO") continue
-                    list.add(AudioHint((attrs["NAME"] ?: "").trim(), (attrs["LANGUAGE"] ?: "").trim()))
+                    val hint = AudioHint((attrs["NAME"] ?: "").trim(), (attrs["LANGUAGE"] ?: "").trim())
+                    when (attrs["TYPE"]) {
+                        "AUDIO" -> list.add(hint)
+                        "SUBTITLES", "CLOSED-CAPTIONS" -> subList.add(hint)
+                    }
                 }
-                if (list.isNotEmpty() && seq == startSeq.get()) {
+                if ((list.isNotEmpty() || subList.isNotEmpty()) && seq == startSeq.get()) {
                     audioHints = list
+                    subtitleHints = subList
                     mainHandler.post { if (seq == startSeq.get()) onEvent?.invoke(EngineEvent.TracksChanged) }
                 }
             } catch (e: Throwable) {
@@ -378,15 +385,25 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
         }.start()
     }
 
-    /** 先按轨道编号排，再按 m3u8 里 EXT-X-MEDIA 的顺序重排（名字或语言对得上的排在前面，对不上的保持原序放后面） */
-    private fun orderAudio(list: List<Entry>): List<Entry> {
-        val rest = list.sortedBy { it.id.toIntOrNull() ?: Int.MAX_VALUE }.toMutableList()
-        val hints = audioHints
+    /**
+     * 1) 先按轨道编号排；2) 同名（忽略大小写和首尾空格）的只保留编号最小的一条（选中后冒出来的同名重复项也不会再显示）；
+     * 3) 再按 m3u8 里 EXT-X-MEDIA 的书写顺序重排：名字完全一致优先，其次包含，再次按语言；对不上的保持原序放后面。
+     */
+    private fun orderTracks(raw: List<Entry>, hints: List<AudioHint>): List<Entry> {
+        val sorted = raw.sortedBy { it.id.toIntOrNull() ?: Int.MAX_VALUE }
+        val seen = HashSet<String>()
+        val rest = ArrayList<Entry>()
+        for (e in sorted) {
+            val key = e.name.trim().lowercase(Locale.ROOT)
+            if (key.isNotEmpty() && !seen.add(key)) continue
+            rest.add(e)
+        }
         if (hints.isEmpty()) return rest
         val out = ArrayList<Entry>()
         for (h in hints) {
             val n = h.name.lowercase(Locale.ROOT)
-            var hit = if (n.isNotEmpty()) rest.firstOrNull { it.name.lowercase(Locale.ROOT).contains(n) } else null
+            var hit = if (n.isNotEmpty()) rest.firstOrNull { it.name.trim().lowercase(Locale.ROOT) == n } else null
+            if (hit == null && n.isNotEmpty()) hit = rest.firstOrNull { it.name.lowercase(Locale.ROOT).contains(n) }
             if (hit == null && h.lang.isNotEmpty()) {
                 val l = h.lang.lowercase(Locale.ROOT)
                 hit = rest.firstOrNull { it.name.lowercase(Locale.ROOT).contains("[$l]") || it.name.lowercase(Locale.ROOT).contains(l) }
@@ -395,6 +412,15 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
         }
         out.addAll(rest)
         return out
+    }
+
+    /** 当前轨道是不是（或和）这一条同名：被合并掉的同名重复项被选中时，也算选中保留的那一条 */
+    private fun sameTrack(e: Entry, curId: String?, all: List<Entry>): Boolean {
+        if (curId == null) return false
+        if (e.id == curId) return true
+        val cur = all.firstOrNull { it.id == curId } ?: return false
+        val n = cur.name.trim().lowercase(Locale.ROOT)
+        return n.isNotEmpty() && n == e.name.trim().lowercase(Locale.ROOT)
     }
 
     private var audioUserPicked = false
@@ -408,26 +434,28 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
         try {
             // 音轨（列表里 id = -1 的是“禁用”，不显示）
             // VLC 按“流出现的先后”给音轨排序，不一定是节目表里的顺序：按轨道编号从小到大重排
-            val audios = orderAudio(entries(mp.audioTracks).filter { !isDisabled(it.id) })
+            val rawAudio = entries(mp.audioTracks).filter { !isDisabled(it.id) }
+            val audios = orderTracks(rawAudio, audioHints)
             audioEntries = audios
             if (applyDefaults && !audioUserPicked) {
                 // 没有手动选过音轨时，始终选第一条（后面的音轨晚出现时也会回到第一条）
                 val first = audios.firstOrNull()
                 if (first != null && currentId("getAudioTrack") != first.id) setTrack("setAudioTrack", first.id)
             }
-            val selA = currentId("getAudioTrack")
+            val curA = currentId("getAudioTrack")
 
             // 字幕轨：一出现就选中第一条（用户自己选过 / 关闭过就不再自动选）
-            val subs = entries(mp.spuTracks).filter { !isDisabled(it.id) }.sortedBy { it.id.toIntOrNull() ?: Int.MAX_VALUE }
+            val rawSubs = entries(mp.spuTracks).filter { !isDisabled(it.id) }
+            val subs = orderTracks(rawSubs, subtitleHints)
             subtitleEntries = subs
             if (applyDefaults && !userPickedSubtitle && currentId("getSpuTrack").let { it == null || isDisabled(it) }) {
                 subs.firstOrNull()?.let { setTrack("setSpuTrack", it.id) }
             }
-            val selS = currentId("getSpuTrack")
+            val curS = currentId("getSpuTrack")
 
             lastTracks = EngineTracks(
-                audio = audios.mapIndexed { i, e -> TrackItem("a$i", clean(e.name, "音轨 ${i + 1}"), e.id == selA) },
-                subtitles = subs.mapIndexed { i, e -> TrackItem("s$i", clean(e.name, "字幕 ${i + 1}"), e.id == selS) },
+                audio = audios.mapIndexed { i, e -> TrackItem("a$i", clean(e.name, "音轨 ${i + 1}"), sameTrack(e, curA, rawAudio)) },
+                subtitles = subs.mapIndexed { i, e -> TrackItem("s$i", clean(e.name, "字幕 ${i + 1}"), sameTrack(e, curS, rawSubs)) },
             )
         } catch (e: Throwable) {
             Log.w(TAG, "refreshTracks", e)
