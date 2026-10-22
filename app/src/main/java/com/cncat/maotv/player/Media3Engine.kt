@@ -124,15 +124,14 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         }
 
         val cacheMs = Math.round(s.cacheSeconds * 1000).toInt()
-        val load = DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                maxOf(cacheMs, 5000),          // 最小缓冲
-                maxOf(cacheMs * 2, 15000),     // 最大缓冲
-                cacheMs,                       // 起播前缓冲
-                cacheMs,                       // 卡顿后恢复前缓冲
-            )
-            .setPrioritizeTimeOverSizeThresholds(s.m3PrioritizeTime)
-            .build()
+        val load = MaoLoadControl(
+            minMs = maxOf(cacheMs, 5000),          // 最小缓冲
+            maxMs = maxOf(cacheMs * 2, 15000),     // 最大缓冲
+            startMs = cacheMs,                     // 起播前缓冲（TS 连续流：缓存满设定值再起播）
+            afterRebufferMs = cacheMs.coerceAtLeast(1000),   // 卡顿后恢复前缓冲
+            prioritizeTime = s.m3PrioritizeTime,
+        )
+        loadControl = load
 
         val ts = DefaultTrackSelector(appContext)
         ts.setParameters(ts.buildUponParameters()
@@ -254,8 +253,21 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
             return
         }
         resetSelection()
+        // m3u8 能拿到“未来数据”：约 1 秒就起播，之后继续缓存；TS 等连续流：缓存到设定值再起播
+        loadControl?.fastStart = guessKind(url) == Kind.HLS
+        hints = M3u8Hints.EMPTY
+        val seq = hintSeq.incrementAndGet()
+        M3u8Hints.fetch(url) { h ->
+            if (seq == hintSeq.get()) android.os.Handler(android.os.Looper.getMainLooper()).post {
+                if (seq == hintSeq.get()) { hints = h; onEvent?.invoke(EngineEvent.TracksChanged) }
+            }
+        }
         open(p, guessKind(url))
     }
+
+    @Volatile private var hints: M3u8Hints = M3u8Hints.EMPTY
+    private val hintSeq = java.util.concurrent.atomic.AtomicInteger(0)
+    private var loadControl: MaoLoadControl? = null
 
     private fun open(p: ExoPlayer, kind: Kind) {
         triedKinds.add(kind)
@@ -387,13 +399,22 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
                 else if (g.type == C.TRACK_TYPE_TEXT) tRefs.add(TrackRef(g, i))
             }
         }
-        audioRefs = aRefs
-        textRefs = tRefs
+        // 按 m3u8 的 EXT-X-MEDIA 顺序重排并统一命名（和 VLC 一致）；没有 m3u8 信息时保持播放器给出的顺序
+        fun cand(r: TrackRef): TrackCand {
+            val f = r.group.getTrackFormat(r.index)
+            return TrackCand(f.label.orEmpty(), f.language?.takeIf { it != "und" }.orEmpty())
+        }
+        val aOrd = TrackArranger.arrange(aRefs.map(::cand), hints.audio)
+        val tOrd = TrackArranger.arrange(tRefs.map(::cand), hints.subtitles)
+        val aSorted = aOrd.map { aRefs[it.first] }
+        val tSorted = tOrd.map { tRefs[it.first] }
+        audioRefs = aSorted
+        textRefs = tSorted
 
         // 字幕轨一出现就选中第一条（用户自己选过 / 关闭过就不再自动选）
         val textDisabled = ts.parameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
-        if (applyDefaults && !userPickedSubtitle && textDisabled && tRefs.isNotEmpty()) {
-            val first = tRefs.first()
+        if (applyDefaults && !userPickedSubtitle && textDisabled && tSorted.isNotEmpty()) {
+            val first = tSorted.first()
             ts.setParameters(ts.buildUponParameters()
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                 .setOverrideForType(TrackSelectionOverride(first.group.mediaTrackGroup, first.index))
@@ -402,11 +423,13 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         val textOn = !ts.parameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
 
         lastTracks = EngineTracks(
-            audio = aRefs.mapIndexed { i, r ->
-                TrackItem("a$i", trackName(r.group.getTrackFormat(r.index), "音轨 ${i + 1}"), r.group.isTrackSelected(r.index))
+            audio = aOrd.mapIndexed { i, (idx, n) ->
+                val r = aRefs[idx]
+                TrackItem("a$i", n ?: trackName(r.group.getTrackFormat(r.index), "音轨 ${i + 1}"), r.group.isTrackSelected(r.index))
             },
-            subtitles = tRefs.mapIndexed { i, r ->
-                TrackItem("s$i", trackName(r.group.getTrackFormat(r.index), "字幕 ${i + 1}"), textOn && r.group.isTrackSelected(r.index))
+            subtitles = tOrd.mapIndexed { i, (idx, n) ->
+                val r = tRefs[idx]
+                TrackItem("s$i", n ?: trackName(r.group.getTrackFormat(r.index), "字幕 ${i + 1}"), textOn && r.group.isTrackSelected(r.index))
             },
         )
         return lastTracks
@@ -635,5 +658,24 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
 
     companion object {
         private const val TAG = "Media3Engine"
+    }
+}
+
+/** 起播策略：m3u8（fastStart）缓存约 1 秒就起播，起播后继续缓存到设定值；其余按设定的缓存时间起播 */
+@androidx.annotation.OptIn(UnstableApi::class)
+class MaoLoadControl(
+    minMs: Int, maxMs: Int, startMs: Int, afterRebufferMs: Int, prioritizeTime: Boolean,
+) : DefaultLoadControl(
+    androidx.media3.exoplayer.upstream.DefaultAllocator(true, C.DEFAULT_BUFFER_SEGMENT_SIZE),
+    minMs, maxMs, startMs, afterRebufferMs, C.LENGTH_UNSET, prioritizeTime, 0, false,
+) {
+    @Volatile var fastStart = false
+
+    override fun shouldStartPlayback(parameters: androidx.media3.exoplayer.LoadControl.Parameters): Boolean {
+        if (fastStart && !parameters.rebuffering) {
+            val bufferedUs = (parameters.bufferedDurationUs / parameters.playbackSpeed.coerceAtLeast(0.1f)).toLong()
+            if (bufferedUs >= 1_000_000L) return true
+        }
+        return super.shouldStartPlayback(parameters)
     }
 }
