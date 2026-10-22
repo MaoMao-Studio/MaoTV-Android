@@ -162,7 +162,7 @@ private fun androidx.compose.foundation.layout.BoxScope.LandscapeLayers(ui: UiSt
         modifier = Modifier.fillMaxSize(),
     ) {
         Box(Modifier.fillMaxSize()) {
-            ControlButtons(ui, insets, Modifier.align(Alignment.BottomEnd))
+            if (ui.buttonsShown) ControlButtons(ui, insets, Modifier.align(Alignment.BottomEnd))
             // 时钟：右边缘与底部按钮行的最右侧按钮对齐（用同一个 END_PADDING），
             // 垂直中心对齐频道列表第一行高亮条中心。
             Box(
