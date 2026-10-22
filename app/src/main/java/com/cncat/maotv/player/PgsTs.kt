@@ -137,11 +137,44 @@ class MaoExtractorsFactory(private val tsFlags: Int) : ExtractorsFactory {
 
 
 /**
+ * 让 HLS 的 TS 分片里“多条音轨”都能被识别：
+ * HlsSampleStreamWrapper 对同一类型（音频）只映射第一条，其余会被丢弃；
+ * 这里把第 2 条起的音频以 TRACK_TYPE_UNKNOWN 上报，播放器就会为每条单独建一个采样队列，并按 MIME 当作音轨暴露。
+ */
+class MultiAudioTsExtractor(
+    private val ts: TsExtractor,
+    private val mainAudioId: java.util.concurrent.atomic.AtomicInteger,
+) : Extractor {
+    override fun sniff(input: ExtractorInput): Boolean = ts.sniff(input)
+
+    override fun init(output: ExtractorOutput) {
+        ts.init(object : ExtractorOutput {
+            override fun track(id: Int, type: Int): TrackOutput {
+                var t = type
+                if (type == C.TRACK_TYPE_AUDIO) {
+                    mainAudioId.compareAndSet(-1, id)
+                    if (id != mainAudioId.get()) t = C.TRACK_TYPE_UNKNOWN
+                }
+                return output.track(id, t)
+            }
+            override fun endTracks() = output.endTracks()
+            override fun seekMap(seekMap: androidx.media3.extractor.SeekMap) = output.seekMap(seekMap)
+        })
+    }
+
+    override fun read(input: ExtractorInput, seekPosition: androidx.media3.extractor.PositionHolder): Int = ts.read(input, seekPosition)
+    override fun seek(position: Long, timeUs: Long) = ts.seek(position, timeUs)
+    override fun release() = ts.release()
+    override fun getUnderlyingImplementation(): Extractor = ts
+}
+
+/**
  * HLS 用的提取器工厂：分片是 TS 时换成认识 PGS 的 TS 解析器（其余情况交给默认实现）。
  * 配合关闭“无分片准备”，播放器才会从第一个分片里发现内嵌的字幕轨道。
  */
 class MaoHlsExtractorFactory(private val tsFlags: Int) : HlsExtractorFactory {
     private val base = DefaultHlsExtractorFactory(tsFlags, false)
+    private val mainAudioId = java.util.concurrent.atomic.AtomicInteger(-1)
 
     // 字幕相关设置交给默认实现：WebVTT 等必须在提取阶段解析成 cues，否则渲染器会报错 → “网络错误，正在重试”
     override fun setSubtitleParserFactory(subtitleParserFactory: SubtitleParser.Factory): HlsExtractorFactory {
@@ -179,7 +212,7 @@ class MaoHlsExtractorFactory(private val tsFlags: Int) : HlsExtractorFactory {
         val isTs = try { ts.sniff(sniffingExtractorInput) } catch (e: Exception) { false }
         sniffingExtractorInput.resetPeekPosition()
         if (isTs) {
-            return BundledHlsMediaChunkExtractor(ts, format, timestampAdjuster)
+            return BundledHlsMediaChunkExtractor(MultiAudioTsExtractor(ts, mainAudioId), format, timestampAdjuster)
         }
         return base.createExtractor(uri, format, muxedCaptionFormats, timestampAdjuster, responseHeaders, sniffingExtractorInput, playerId)
     }
