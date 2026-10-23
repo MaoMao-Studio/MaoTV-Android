@@ -99,7 +99,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
     private fun configKey(c: EngineConfig): String {
         val s = c.settings
         return listOf(c.softwareDecode, s.m3HardwareFirst, s.m3DecoderFallback, s.m3ExceedCaps, s.m3AsyncQueue,
-            s.m3FfmpegAudio, s.m3PrioritizeTime, (s.cacheSeconds * 1000).toInt()).joinToString("|")
+            s.m3FfmpegAudio, s.m3PrioritizeTime, s.m3LateDrop, (s.cacheSeconds * 1000).toInt()).joinToString("|")
     }
 
     private fun buildPlayer(c: EngineConfig): ExoPlayer {
@@ -110,7 +110,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
             // 默认硬解优先；“强制软解 / 本次临时回退”时软解排在前面（硬解仍留作后备）
             if (hwFirst) list.sortedByDescending { it.hardwareAccelerated } else list.sortedBy { it.hardwareAccelerated }
         }
-        val rf = DefaultRenderersFactory(appContext)
+        val rf = MaoRenderersFactory(appContext, s.m3LateDrop)
             .setExtensionRendererMode(
                 if (s.m3FfmpegAudio) DefaultRenderersFactory.EXTENSION_RENDERER_MODE_PREFER
                 else DefaultRenderersFactory.EXTENSION_RENDERER_MODE_ON
@@ -677,5 +677,50 @@ class MaoLoadControl(
             if (bufferedUs >= 1_000_000L) return true
         }
         return super.shouldStartPlayback(parameters)
+    }
+}
+
+/** 视频渲染器：按设置放宽“晚到就丢帧”的条件（默认 30ms；宽松 120ms；不丢帧）。解决部分盒子（如 S912 的 awesome 解码器）高帧率下丢帧不断增加 */
+@androidx.annotation.OptIn(UnstableApi::class)
+private class MaoVideoRenderer(
+    context: android.content.Context,
+    factory: androidx.media3.exoplayer.mediacodec.MediaCodecAdapter.Factory,
+    selector: MediaCodecSelector,
+    joiningMs: Long,
+    fallback: Boolean,
+    handler: android.os.Handler?,
+    listener: androidx.media3.exoplayer.video.VideoRendererEventListener?,
+    private val mode: com.cncat.maotv.core.LateDropMode,
+) : androidx.media3.exoplayer.video.MediaCodecVideoRenderer(context, factory, selector, joiningMs, fallback, handler, listener, 50) {
+    override fun shouldDropOutputBuffer(earlyUs: Long, elapsedRealtimeUs: Long, isLastBuffer: Boolean): Boolean = when (mode) {
+        com.cncat.maotv.core.LateDropMode.DEFAULT -> super.shouldDropOutputBuffer(earlyUs, elapsedRealtimeUs, isLastBuffer)
+        com.cncat.maotv.core.LateDropMode.RELAXED -> earlyUs < -120_000L && !isLastBuffer
+        com.cncat.maotv.core.LateDropMode.OFF -> false
+    }
+}
+
+@androidx.annotation.OptIn(UnstableApi::class)
+private class MaoRenderersFactory(
+    context: android.content.Context,
+    private val mode: com.cncat.maotv.core.LateDropMode,
+) : DefaultRenderersFactory(context) {
+    override fun buildVideoRenderers(
+        context: android.content.Context,
+        extensionRendererMode: Int,
+        mediaCodecSelector: MediaCodecSelector,
+        enableDecoderFallback: Boolean,
+        eventHandler: android.os.Handler,
+        eventListener: androidx.media3.exoplayer.video.VideoRendererEventListener,
+        allowedVideoJoiningTimeMs: Long,
+        out: java.util.ArrayList<androidx.media3.exoplayer.Renderer>,
+    ) {
+        val before = out.size
+        super.buildVideoRenderers(context, extensionRendererMode, mediaCodecSelector, enableDecoderFallback,
+            eventHandler, eventListener, allowedVideoJoiningTimeMs, out)
+        if (mode != com.cncat.maotv.core.LateDropMode.DEFAULT && out.size > before) {
+            // 第一个就是默认的 MediaCodecVideoRenderer：换成我们的
+            out[before] = MaoVideoRenderer(context, getCodecAdapterFactory(), mediaCodecSelector, allowedVideoJoiningTimeMs,
+                enableDecoderFallback, eventHandler, eventListener, mode)
+        }
     }
 }
