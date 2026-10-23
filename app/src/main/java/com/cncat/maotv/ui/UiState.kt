@@ -188,8 +188,9 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
     fun showMenu(focusButtons: Boolean = false, buttonsOnly: Boolean = false, touch: Boolean = false) {
         if (portrait) return
         transitionJob?.cancel()
-        val mustWait = osdVisible || osdClosing
+        val mustWait = osdVisible || osdClosing || menuVisible
         if (osdVisible) hideOSD()
+        if (menuVisible) hideMenu()      // 选单正在显示：先收起，再按要求重新呈现
         transitionJob = scope.launch {
             if (mustWait) {
                 delay(SLIDE_WAIT)
@@ -608,8 +609,7 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
         val cats = categories
         when (code) {
             KeyEvent.KEYCODE_MENU -> {
-                if (!buttonsShown) hideMenu()     // 遥控器 / 键盘呼出的选单没有右下角按钮：菜单键直接收起选单
-                else if (zone == Zone.BUTTON) zone = Zone.CHANNEL else { zone = Zone.BUTTON; btnFocus = 1 }
+                showMenu(buttonsOnly = true)      // 菜单键：先收起选单，再只显示右下角的设置按钮
             }
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (repeat == 0) player.togglePause()
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN,
