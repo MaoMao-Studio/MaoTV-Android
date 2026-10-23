@@ -208,7 +208,7 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
         popup = null
         val list = channelsInSelected()
         chFocus = list.indexOfFirst { it.id == player.current?.id }.coerceAtLeast(0)
-        if (focusButtons || only) { zone = Zone.BUTTON; btnFocus = 1 } else zone = Zone.CHANNEL
+        if (focusButtons || only) zone = Zone.BUTTON else zone = Zone.CHANNEL   // 按钮焦点保持上次的位置（启动后第一次在“音轨”上）
         player.refreshTracks()
         bumpHideTimer()
     }
