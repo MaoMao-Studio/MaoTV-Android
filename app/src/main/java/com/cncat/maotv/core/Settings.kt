@@ -46,6 +46,7 @@ data class SettingsValues(
     val m3ExceedCaps: Boolean = true,         // 超出设备能力时仍尝试播放
     val m3AsyncQueue: AsyncQueueMode = AsyncQueueMode.AUTO,
     val m3FfmpegAudio: Boolean = false,       // 强制用 FFmpeg 软解音频（排查用）
+    val m3NoOperatingRate: Boolean = false,   // 不给解码器设置“操作速率”（部分 Amlogic 旧解码器在高帧率下会被它限速）
     val m3LateDrop: LateDropMode = LateDropMode.DEFAULT,   // 视频晚到时的丢帧策略（50 / 60fps 在部分盒子上丢帧严重时调整）
     // —— Media3：带伤继续播 ——
     val m3TsNonIdr: Boolean = true,           // TS 允许从非关键帧开始
@@ -84,6 +85,7 @@ class SettingsStore(context: Context) {
             m3AsyncQueue = AsyncQueueMode.from(sp.getString("m3AsyncQueue", null)),
             m3FfmpegAudio = sp.getBoolean("m3FfmpegAudio", d.m3FfmpegAudio),
             m3LateDrop = LateDropMode.from(sp.getString("m3LateDrop", null)),
+            m3NoOperatingRate = sp.getBoolean("m3NoOperatingRate", d.m3NoOperatingRate),
             m3TsNonIdr = sp.getBoolean("m3TsNonIdr", d.m3TsNonIdr),
             m3TsDetectAu = sp.getBoolean("m3TsDetectAu", d.m3TsDetectAu),
             m3KeepPlaying = sp.getBoolean("m3KeepPlaying", d.m3KeepPlaying),
@@ -108,6 +110,7 @@ class SettingsStore(context: Context) {
             .putString("m3AsyncQueue", nv.m3AsyncQueue.key)
             .putBoolean("m3FfmpegAudio", nv.m3FfmpegAudio)
             .putString("m3LateDrop", nv.m3LateDrop.key)
+            .putBoolean("m3NoOperatingRate", nv.m3NoOperatingRate)
             .putBoolean("m3TsNonIdr", nv.m3TsNonIdr)
             .putBoolean("m3TsDetectAu", nv.m3TsDetectAu)
             .putBoolean("m3KeepPlaying", nv.m3KeepPlaying)
