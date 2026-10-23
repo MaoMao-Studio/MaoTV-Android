@@ -56,6 +56,7 @@ fun settingsRows(ui: UiState): List<SRow> {
         rows += SRow.Toggle("超出设备能力仍尝试播放", "分辨率/码率超出解码器标称能力时仍然继续播放。", v.m3ExceedCaps) { on -> edit { it.copy(m3ExceedCaps = on) } }
         rows += SRow.Segment("异步解码队列", AsyncQueueMode.values().map { it.title }, v.m3AsyncQueue.ordinal) { i -> edit { it.copy(m3AsyncQueue = AsyncQueueMode.values()[i]) } }
         rows += SRow.Segment("视频晚到丢帧", LateDropMode.values().map { it.title }, v.m3LateDrop.ordinal) { i -> edit { it.copy(m3LateDrop = LateDropMode.values()[i]) } }
+        rows += SRow.Toggle("不设置解码器操作速率", "高帧率（50 / 60fps）频道丢帧严重、而网络没问题时可以打开试试；个别旧解码器会被“操作速率”限速。", v.m3NoOperatingRate) { on -> edit { it.copy(m3NoOperatingRate = on) } }
         rows += SRow.Toggle("强制 FFmpeg 软解音频（排查用）", "MP2 / AC3 等音频本来就会自动用 FFmpeg 解码，一般不用打开。", v.m3FfmpegAudio) { on -> edit { it.copy(m3FfmpegAudio = on) } }
 
         rows += SRow.Header("Media3兼容性选项")
