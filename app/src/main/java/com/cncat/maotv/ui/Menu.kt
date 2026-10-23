@@ -129,15 +129,22 @@ fun CategorySidebar(ui: UiState, cats: List<Category>, textW: Dp, modifier: Modi
             val fav = c.id == Category.FAVORITES_ID
             val shape = RoundedCornerShape(u(10))
             val remote = false   // 不再单独画“焦点白框”：高亮条就是焦点
+            // 遥控器 / 键盘：焦点在频道列表时，所属分类用“淡灰色高亮”；焦点在分类上时分类用正常高亮条
+            // “焦点”：遥控器是方向键移到的位置，触屏 / 鼠标是最后点击的位置（点分类 → 分类；点频道 → 频道列表）
+            val hlMain = selected && ui.zone == Zone.CATEGORY
+            val hlDim = selected && !hlMain
             Box(
                 Modifier.fillMaxWidth()
                     .clip(shape)
-                    .background(if (selected) Theme.selectedFill(fav) else androidx.compose.ui.graphics.SolidColor(Color.Transparent), shape)
+                    .background(
+                        if (hlMain) Theme.selectedFill(fav)
+                        else androidx.compose.ui.graphics.SolidColor(if (hlDim) Color.White.copy(alpha = 0.14f) else Color.Transparent), shape,
+                    )
                     .border(
                         u(if (remote) 2 else 1),
-                        if (remote) Color.White else if (selected) Theme.selectedBorder(fav) else Color.Transparent, shape,
+                        if (remote) Color.White else if (hlMain) Theme.selectedBorder(fav) else Color.Transparent, shape,
                     )
-                    .tap { ui.selectCategory(c.id); ui.onTouchActivity() }
+                    .tap { ui.zone = Zone.CATEGORY; ui.selectCategory(c.id); ui.onTouchActivity() }
                     .padding(horizontal = u(10), vertical = u(12)),
                 contentAlignment = Alignment.Center,
             ) {
@@ -164,6 +171,7 @@ fun ChannelRow(
     gold: Boolean,
     focused: Boolean,
     starFocused: Boolean,
+    dim: Boolean = false,
     modifier: Modifier = Modifier,
     onTap: () -> Unit,
 ) {
@@ -176,7 +184,7 @@ fun ChannelRow(
         modifier.fillMaxWidth().height(rowHeight)
             .clip(shape)
             .background(
-                if (selected) Theme.selectedFill(gold) else androidx.compose.ui.graphics.SolidColor(Color.White.copy(alpha = 0.04f)),
+                if (selected) Theme.selectedFill(gold) else androidx.compose.ui.graphics.SolidColor(Color.White.copy(alpha = if (dim) 0.14f else 0.04f)),
                 shape,
             )
             .border(
@@ -387,11 +395,18 @@ fun ChannelList(
                 val animMod = if (dragged) Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = null)
                 else Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)
                 // 遥控器 / 键盘操作时：高亮条跟着焦点走（焦点所在行高亮，正在播放的那行不再单独高亮）；触屏仍高亮正在播放的频道
-                val hl = if (ui.remoteActive && focusIndex >= 0) idx == focusIndex else selected
+                val inMenu = !ui.portrait
+                val onCategory = inMenu && ui.zone == Zone.CATEGORY
+                val hl = when {
+                    onCategory -> false
+                    inMenu && ui.remoteActive && focusIndex >= 0 -> idx == focusIndex   // 遥控器：高亮条跟着焦点走
+                    else -> selected                                                    // 触屏 / 鼠标：正在播放的频道
+                }
+                val dim = onCategory && selected      // 焦点在分类上：正在播放的频道用“淡灰色高亮”
                 ChannelRow(
                     channel = ch, model = model, favSet = favSet, selected = hl,
                     marquee = menuOpen && hl, numberWidth = numberWidth, rowHeight = rowDp, gold = gold,
-                    focused = ui.remoteActive && idx == focusIndex, starFocused = ui.remoteActive && idx == focusIndex && starFocus,
+                    focused = ui.remoteActive && idx == focusIndex, starFocused = ui.remoteActive && idx == focusIndex && starFocus, dim = dim,
                     modifier = animMod
                         .zIndex(if (dragged) 1f else 0f)
                         .graphicsLayer {
