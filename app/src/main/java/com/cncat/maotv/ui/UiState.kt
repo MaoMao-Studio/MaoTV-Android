@@ -52,6 +52,8 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
     var buttonsShown by mutableStateOf(true)
         private set
     var epgOpen by mutableStateOf(false)
+    /** 遥控器 / 键盘在哪个频道按右键展开节目单，就显示哪个频道的；null = 正在播放的频道（触摸点把手展开时） */
+    var epgChannel by mutableStateOf<com.cncat.maotv.core.Channel?>(null)
     var selectedCategoryId by mutableStateOf(Category.ALL_ID)
         private set
     var menuShowCount by mutableIntStateOf(0)
@@ -223,6 +225,7 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
             if (menuVisible) return@launch
             menuClosing = false
             epgOpen = false      // 收完以后再把节目单复位（此时已在屏幕外）
+            epgChannel = null
         }
     }
 
@@ -548,8 +551,14 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
     }
 
     private fun onLongOk() {
+        // 左侧选单里、焦点在频道列表：长按确定 = 收藏 / 取消收藏当前焦点频道（键盘回车长按同理）
+        if (menuVisible && !buttonsOnly && zone == Zone.CHANNEL && digits.isEmpty() && !sslConfirm && !settingsVisible && !diagVisible && popup == null && !portrait) {
+            channelsInSelected().getOrNull(chFocus)?.let { model.toggleFavorite(it) }
+            bumpHideTimer()
+            return
+        }
         if (digits.isNotEmpty() || sslConfirm || settingsVisible || diagVisible || popup != null || portrait) return
-        if (menuVisible) { if (!buttonsOnly) { buttonsShown = true; zone = Zone.BUTTON; btnFocus = 1 }; bumpHideTimer() } else showMenu(focusButtons = true)
+        if (menuVisible) bumpHideTimer() else showMenu(buttonsOnly = true)   // 只有画面时长按确定 = 短按菜单键：仅显示右下角按钮
     }
 
     // —— 只有画面时 ——
@@ -600,7 +609,8 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
         val cats = categories
         when (code) {
             KeyEvent.KEYCODE_MENU -> {
-                if (buttonsShown && zone == Zone.BUTTON) zone = Zone.CHANNEL else { buttonsShown = true; zone = Zone.BUTTON; btnFocus = 1 }
+                if (!buttonsShown) hideMenu()     // 遥控器 / 键盘呼出的选单没有右下角按钮：菜单键直接收起选单
+                else if (zone == Zone.BUTTON) zone = Zone.CHANNEL else { zone = Zone.BUTTON; btnFocus = 1 }
             }
             KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (repeat == 0) player.togglePause()
             KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN,
@@ -633,16 +643,17 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
             KeyEvent.KEYCODE_DPAD_LEFT -> when (zone) {
                 Zone.CATEGORY -> {}
                 Zone.CHANNEL -> zone = Zone.CATEGORY
-                Zone.STAR -> zone = Zone.CHANNEL
-                Zone.HANDLE -> zone = Zone.STAR
-                Zone.EPG -> { epgOpen = false; zone = Zone.STAR }      // 遥控器 / 键盘：左键直接收起节目单
+                Zone.STAR, Zone.HANDLE -> zone = Zone.CHANNEL
+                Zone.EPG -> { epgOpen = false; epgChannel = null; zone = Zone.CHANNEL }   // 遥控器 / 键盘：左键直接收起节目单，焦点回频道列表
                 Zone.BUTTON -> btnFocus = (btnFocus - 1).coerceAtLeast(0)
             }
             KeyEvent.KEYCODE_DPAD_RIGHT -> when (zone) {
                 Zone.CATEGORY -> zone = Zone.CHANNEL
-                Zone.CHANNEL -> zone = Zone.STAR
-                Zone.STAR -> { epgOpen = true; zone = Zone.EPG }       // 遥控器 / 键盘：右键直接呼出节目单（不再停在“节目单”把手列）
-                Zone.HANDLE -> { epgOpen = true; zone = Zone.EPG }
+                Zone.CHANNEL -> channelsInSelected().getOrNull(chFocus)?.let {   // 遥控器 / 键盘：右键直接展开“当前焦点频道”的节目单
+                    epgChannel = it; epgOpen = true; zone = Zone.EPG
+                }
+                Zone.STAR -> zone = Zone.CHANNEL
+                Zone.HANDLE -> zone = Zone.CHANNEL
                 Zone.EPG -> {}
                 Zone.BUTTON -> btnFocus = (btnFocus + 1).coerceAtMost(BUTTON_COUNT - 1)
             }
