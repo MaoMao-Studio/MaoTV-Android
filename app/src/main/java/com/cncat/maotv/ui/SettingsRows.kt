@@ -2,6 +2,7 @@ package com.cncat.maotv.ui
 
 import com.cncat.maotv.core.AsyncQueueMode
 import com.cncat.maotv.core.EngineKind
+import com.cncat.maotv.core.LateDropMode
 import com.cncat.maotv.core.SettingsValues
 
 private const val HW_HINT = "优先使用硬解，当播放画面异常可尝试使用软解。"
@@ -54,6 +55,7 @@ fun settingsRows(ui: UiState): List<SRow> {
         rows += SRow.Toggle("解码器自动降级", "首选解码器失败时自动换用下一个可用的解码器（含软解）。", v.m3DecoderFallback) { on -> edit { it.copy(m3DecoderFallback = on) } }
         rows += SRow.Toggle("超出设备能力仍尝试播放", "分辨率/码率超出解码器标称能力时仍然继续播放。", v.m3ExceedCaps) { on -> edit { it.copy(m3ExceedCaps = on) } }
         rows += SRow.Segment("异步解码队列", AsyncQueueMode.values().map { it.title }, v.m3AsyncQueue.ordinal) { i -> edit { it.copy(m3AsyncQueue = AsyncQueueMode.values()[i]) } }
+        rows += SRow.Segment("视频晚到丢帧", LateDropMode.values().map { it.title }, v.m3LateDrop.ordinal) { i -> edit { it.copy(m3LateDrop = LateDropMode.values()[i]) } }
         rows += SRow.Toggle("强制 FFmpeg 软解音频（排查用）", "MP2 / AC3 等音频本来就会自动用 FFmpeg 解码，一般不用打开。", v.m3FfmpegAudio) { on -> edit { it.copy(m3FfmpegAudio = on) } }
 
         rows += SRow.Header("Media3兼容性选项")
