@@ -57,7 +57,7 @@ object TrackArranger {
     private fun norm(s: String) = s.trim().lowercase(Locale.ROOT)
 
     fun arrange(c: List<TrackCand>, hints: List<MediaHint>): List<Pair<Int, String?>> {
-        if (hints.isEmpty()) return dedupe(c, c.indices.map { it to null })
+        if (hints.isEmpty()) return byLanguage(c)
         val rest = c.indices.toMutableList()
         val slots = arrayOfNulls<Int>(hints.size)
         for (pass in 0..2) {
@@ -85,6 +85,29 @@ object TrackArranger {
         for (hi in hints.indices) slots[hi]?.let { out.add(it to hints[hi].display) }
         for (i in rest) out.add(i to null)
         return dedupe(c, out)
+    }
+
+    /** 语言码 / 语言名 → 两个播放器通用的名字（例如 cmn、yue、Chinese）。没有语言信息返回 null */
+    fun langName(code: String): String? {
+        val c = code.trim()
+        if (c.isEmpty() || c.equals("und", true) || c.equals("unk", true)) return null
+        if (c.length > 3 || c.contains(' ')) return c                 // 本来就是名字（如 VLC 的 “[Chinese]”）
+        val n = try { Locale.forLanguageTag(c.lowercase(Locale.ROOT)).getDisplayLanguage(Locale.ENGLISH) } catch (e: Exception) { "" }
+        return if (n.isNotEmpty() && !n.equals(c, true)) n else c.lowercase(Locale.ROOT)
+    }
+
+    /** m3u8 里没有 EXT-X-MEDIA 时（音轨全封装在 TS 里）：两个播放器都用“语言”命名，保持原有顺序；同名的加序号区分 */
+    private fun byLanguage(c: List<TrackCand>): List<Pair<Int, String?>> {
+        val names = c.map { langName(it.lang) }
+        val count = HashMap<String, Int>()
+        for (n in names) if (n != null) count[n] = (count[n] ?: 0) + 1
+        val seen = HashMap<String, Int>()
+        return c.indices.map { i ->
+            val n = names[i]
+            if (n == null) i to null
+            else if ((count[n] ?: 0) > 1) { val k = (seen[n] ?: 0) + 1; seen[n] = k; i to "$n $k" }
+            else i to n
+        }
     }
 
     /** 同名（统一名字，没有则原名）只保留第一条 */
