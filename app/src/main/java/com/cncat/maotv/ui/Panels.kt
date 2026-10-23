@@ -175,7 +175,6 @@ private fun SettingsRowView(row: SRow, focused: Boolean) {
             Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(u(10))) {
                 Txt(row.label, 13, color = Theme.gold, bold = true, modifier = Modifier.weight(1f))
                 Txt(String.format(Locale.US, "%.1f 秒", row.value), 14, weight = FontWeight.SemiBold)
-                Txt("恢复默认", 12, color = Color.White.copy(alpha = 0.7f), modifier = Modifier.tap { row.reset() }.padding(u(4)))
             }
             SliderBar(row.value, row.min, row.max, row.step, row.set)
             if (row.hint != null) Txt(row.hint, 12, color = Color.White.copy(alpha = 0.6f), maxLines = 4)
