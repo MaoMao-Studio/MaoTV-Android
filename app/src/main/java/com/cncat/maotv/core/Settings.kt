@@ -20,6 +20,15 @@ enum class AsyncQueueMode(val key: String, val title: String) {
     }
 }
 
+/** Media3 视频“晚到丢帧”：默认（晚 30ms 就丢） / 宽松（晚 120ms 才丢） / 不丢帧 */
+enum class LateDropMode(val key: String, val title: String) {
+    DEFAULT("default", "默认"), RELAXED("relaxed", "宽松"), OFF("off", "不丢帧");
+
+    companion object {
+        fun from(key: String?) = values().firstOrNull { it.key == key } ?: DEFAULT
+    }
+}
+
 /** 设置面板里编辑的一组值（不可变；面板里改的是草稿，保存时才应用） */
 data class SettingsValues(
     // —— 通用 ——
@@ -37,6 +46,7 @@ data class SettingsValues(
     val m3ExceedCaps: Boolean = true,         // 超出设备能力时仍尝试播放
     val m3AsyncQueue: AsyncQueueMode = AsyncQueueMode.AUTO,
     val m3FfmpegAudio: Boolean = false,       // 强制用 FFmpeg 软解音频（排查用）
+    val m3LateDrop: LateDropMode = LateDropMode.DEFAULT,   // 视频晚到时的丢帧策略（50 / 60fps 在部分盒子上丢帧严重时调整）
     // —— Media3：带伤继续播 ——
     val m3TsNonIdr: Boolean = true,           // TS 允许从非关键帧开始
     val m3TsDetectAu: Boolean = true,         // TS 检测访问单元
@@ -73,6 +83,7 @@ class SettingsStore(context: Context) {
             m3ExceedCaps = sp.getBoolean("m3ExceedCaps", d.m3ExceedCaps),
             m3AsyncQueue = AsyncQueueMode.from(sp.getString("m3AsyncQueue", null)),
             m3FfmpegAudio = sp.getBoolean("m3FfmpegAudio", d.m3FfmpegAudio),
+            m3LateDrop = LateDropMode.from(sp.getString("m3LateDrop", null)),
             m3TsNonIdr = sp.getBoolean("m3TsNonIdr", d.m3TsNonIdr),
             m3TsDetectAu = sp.getBoolean("m3TsDetectAu", d.m3TsDetectAu),
             m3KeepPlaying = sp.getBoolean("m3KeepPlaying", d.m3KeepPlaying),
@@ -96,6 +107,7 @@ class SettingsStore(context: Context) {
             .putBoolean("m3ExceedCaps", nv.m3ExceedCaps)
             .putString("m3AsyncQueue", nv.m3AsyncQueue.key)
             .putBoolean("m3FfmpegAudio", nv.m3FfmpegAudio)
+            .putString("m3LateDrop", nv.m3LateDrop.key)
             .putBoolean("m3TsNonIdr", nv.m3TsNonIdr)
             .putBoolean("m3TsDetectAu", nv.m3TsDetectAu)
             .putBoolean("m3KeepPlaying", nv.m3KeepPlaying)
