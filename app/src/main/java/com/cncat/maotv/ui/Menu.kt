@@ -94,18 +94,32 @@ fun MarqueeText(text: String, size: Number, color: Color, bold: Boolean, active:
     }
 }
 
+/**
+ * 遥控器逐项移动时的平滑滚动：把目标行滚到视口中间。
+ * 关键：滚动距离先按“列表头 / 尾还剩多少”夹住，到头尾就不再往那个方向滚。
+ * （以前不夹的话，列表已经到底了还继续试着往上滚，布局测量时先滚过头、再被纠正回来，肉眼就是“上下抖动”）
+ */
+private suspend fun LazyListState.smoothCenter(index: Int, viewportPx: Int) {
+    val info = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+    if (info == null) { scrollToItem(index); return }
+    var delta = (info.offset + info.size / 2f) - viewportPx / 2f
+    val items = layoutInfo.visibleItemsInfo
+    val last = items.lastOrNull()
+    if (delta > 0f && last != null && last.index == layoutInfo.totalItemsCount - 1) {
+        val remain = (last.offset + last.size) - (layoutInfo.viewportEndOffset - layoutInfo.afterContentPadding)
+        delta = delta.coerceAtMost(remain.toFloat().coerceAtLeast(0f))
+    }
+    val first = items.firstOrNull()
+    if (delta < 0f && first != null && first.index == 0) {
+        val remain = first.offset - layoutInfo.beforeContentPadding        // ≤ 0：内容已经往上滚过的距离
+        delta = delta.coerceAtLeast(remain.toFloat().coerceAtMost(0f))
+    }
+    if (kotlin.math.abs(delta) >= 1f) animateScrollBy(delta)
+}
+
 private suspend fun LazyListState.centerOn(index: Int, viewportPx: Int, rowPx: Int, animate: Boolean) {
     val off = -(viewportPx / 2 - rowPx / 2)
-    if (!animate) { scrollToItem(index, off); return }
-    // 遥控器逐项移动：按“目标行中心 → 视口中心”的距离平滑滚动。到达列表头 / 尾时滚动自然停住（不会反复回弹抖动）。
-    // 之前用 animateScrollToItem(负偏移)：列表最后几项没法居中，目标被夹回后动画来回修正，就会整列抖动。
-    val info = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
-    if (info != null) {
-        val delta = (info.offset + info.size / 2f) - viewportPx / 2f
-        if (kotlin.math.abs(delta) >= 1f) animateScrollBy(delta)
-    } else {
-        scrollToItem(index, off)      // 目标还不在屏幕上（大跨度跳转）：直接定位
-    }
+    if (animate) smoothCenter(index, viewportPx) else scrollToItem(index, off)
 }
 
 // ───────────── 左侧分类 ─────────────
@@ -136,11 +150,7 @@ fun CategorySidebar(ui: UiState, cats: List<Category>, textW: Dp, modifier: Modi
         val idx = cats.indexOfFirst { it.id == ui.selectedCategoryId }
         val vp = state.layoutInfo.viewportSize.height
         if (idx >= 0 && vp > 0) {
-            val info = state.layoutInfo.visibleItemsInfo.firstOrNull { it.index == idx }
-            if (info != null) {
-                val delta = (info.offset + info.size / 2f) - vp / 2f
-                if (kotlin.math.abs(delta) >= 1f) state.animateScrollBy(delta)
-            } else state.scrollToItem(idx)
+            state.smoothCenter(idx, vp)
         }
     }
     LazyColumn(
@@ -417,7 +427,8 @@ fun ChannelList(
                 val idx = shown.indexOf(ch)
                 val dragged = drag.key == ch.id
                 val selected = ch.id == currentId
-                val animMod = if (dragged) Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = null)
+                // 位移动画只用在“我的收藏”拖动排序；其余列表不要，否则滚动被纠正时行会跟着“弹”一下
+                val animMod = if (dragged || !reorderable) Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = null)
                 else Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)
                 // 遥控器 / 键盘操作时：高亮条跟着焦点走（焦点所在行高亮，正在播放的那行不再单独高亮）；触屏仍高亮正在播放的频道
                 val inMenu = !ui.portrait
