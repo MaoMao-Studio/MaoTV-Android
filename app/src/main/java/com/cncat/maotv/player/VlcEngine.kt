@@ -370,7 +370,7 @@ class VlcEngine(private val appContext: Context) : PlaybackEngine {
             if (key.isNotEmpty() && !seen.add(key)) continue
             uniq.add(e)
         }
-        return TrackArranger.arrange(uniq.map { TrackCand(it.name, "") }, hints).map { (i, n) -> uniq[i] to n }
+        return TrackArranger.arrange(uniq.map { TrackCand(it.name, Regex("\\[([^\\]]+)\\]").find(it.name)?.groupValues?.get(1).orEmpty()) }, hints).map { (i, n) -> uniq[i] to n }
     }
 
     /** 当前轨道是不是（或和）这一条同名：被合并掉的同名重复项被选中时，也算选中保留的那一条 */
