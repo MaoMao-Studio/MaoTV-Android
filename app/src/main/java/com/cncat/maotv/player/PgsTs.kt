@@ -136,9 +136,15 @@ class MaoExtractorsFactory(private val tsFlags: Int) : ExtractorsFactory {
 }
 
 
+private class NoLengthInput(private val d: ExtractorInput) : ExtractorInput by d {
+    override fun getLength(): Long = C.LENGTH_UNSET.toLong()
+}
+
 /**
- * 让 HLS 的 TS 分片里“多条音轨”都能被识别：
- * HlsSampleStreamWrapper 对同一类型（音频）只映射第一条，其余会被丢弃；
+ * 让 HLS 的 TS 分片里“多条音轨 / 字幕轨”都能被识别：
+ * Media3 的 TsExtractor 在 HLS 模式下把“流类型”当轨道编号，同一类型（音频 / 字幕）只保留 PID 最小的一条，
+ * 所以这里改用 SINGLE_PMT 模式（轨道编号 = PID，全部保留）+ 长度未知的输入（行为和连续 TS 直播流一致）。
+ * 另外 HlsSampleStreamWrapper 对同一类型（音频）也只映射第一条，其余会被丢弃；
  * 这里把第 2 条起的音频以 TRACK_TYPE_UNKNOWN 上报，播放器就会为每条单独建一个采样队列，并按 MIME 当作音轨暴露。
  */
 class MultiAudioTsExtractor(
@@ -162,7 +168,9 @@ class MultiAudioTsExtractor(
         })
     }
 
-    override fun read(input: ExtractorInput, seekPosition: androidx.media3.extractor.PositionHolder): Int = ts.read(input, seekPosition)
+    // 把输入伪装成“长度未知”的连续流：这样 TsExtractor 不会去跳到文件尾读时长 / 不会读完 PMT 后回到开头重读
+    override fun read(input: ExtractorInput, seekPosition: androidx.media3.extractor.PositionHolder): Int =
+        ts.read(NoLengthInput(input), seekPosition)
     override fun seek(position: Long, timeUs: Long) = ts.seek(position, timeUs)
     override fun release() = ts.release()
     override fun getUnderlyingImplementation(): Extractor = ts
@@ -201,7 +209,7 @@ class MaoHlsExtractorFactory(private val tsFlags: Int) : HlsExtractorFactory {
         var flags = DefaultTsPayloadReaderFactory.FLAG_IGNORE_SPLICE_INFO_STREAM or tsFlags
         if (muxedCaptionFormats != null) flags = flags or DefaultTsPayloadReaderFactory.FLAG_OVERRIDE_CAPTION_DESCRIPTORS
         val ts = TsExtractor(
-            TsExtractor.MODE_HLS,
+            TsExtractor.MODE_SINGLE_PMT,
             0,   // 提取阶段就把字幕解析成 Media3 的 cues（1.5 起渲染阶段不再解析原始 PGS，否则会报错）
             DefaultSubtitleParserFactory(),
             timestampAdjuster,
