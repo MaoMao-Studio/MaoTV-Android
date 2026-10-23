@@ -128,7 +128,7 @@ fun CategorySidebar(ui: UiState, cats: List<Category>, textW: Dp, modifier: Modi
             val selected = c.id == ui.selectedCategoryId
             val fav = c.id == Category.FAVORITES_ID
             val shape = RoundedCornerShape(u(10))
-            val remote = ui.remoteActive && ui.menuVisible && ui.zone == Zone.CATEGORY && selected
+            val remote = false   // 不再单独画“焦点白框”：高亮条就是焦点
             Box(
                 Modifier.fillMaxWidth()
                     .clip(shape)
@@ -180,8 +180,8 @@ fun ChannelRow(
                 shape,
             )
             .border(
-                u(if (focused) 2 else 1),
-                if (focused) Color.White else if (selected) Theme.selectedBorder(gold) else Color.Transparent, shape,
+                u(1),
+                if (selected) Theme.selectedBorder(gold) else Color.Transparent, shape,
             )
             .tap(onTap)
             .padding(start = u(10), end = u(3.5f)),
@@ -203,7 +203,6 @@ fun ChannelRow(
         val starShape = RoundedCornerShape(u(8))
         Box(
             Modifier.size(u(32)).clip(starShape)
-                .border(u(if (starFocused) 2 else 0), if (starFocused) Color.White else Color.Transparent, starShape)
                 .tap { model.toggleFavorite(channel) },
             contentAlignment = Alignment.Center,
         ) {
@@ -387,9 +386,11 @@ fun ChannelList(
                 val selected = ch.id == currentId
                 val animMod = if (dragged) Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = null)
                 else Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)
+                // 遥控器 / 键盘操作时：高亮条跟着焦点走（焦点所在行高亮，正在播放的那行不再单独高亮）；触屏仍高亮正在播放的频道
+                val hl = if (ui.remoteActive && focusIndex >= 0) idx == focusIndex else selected
                 ChannelRow(
-                    channel = ch, model = model, favSet = favSet, selected = selected,
-                    marquee = menuOpen && selected, numberWidth = numberWidth, rowHeight = rowDp, gold = gold,
+                    channel = ch, model = model, favSet = favSet, selected = hl,
+                    marquee = menuOpen && hl, numberWidth = numberWidth, rowHeight = rowDp, gold = gold,
                     focused = ui.remoteActive && idx == focusIndex, starFocused = ui.remoteActive && idx == focusIndex && starFocus,
                     modifier = animMod
                         .zIndex(if (dragged) 1f else 0f)
@@ -425,12 +426,12 @@ private class DragState {
 
 @Composable
 fun EPGHandle(ui: UiState, isOpen: Boolean, modifier: Modifier = Modifier) {
-    val remote = ui.remoteActive && ui.menuVisible && ui.zone == Zone.HANDLE
+    val remote = false   // 遥控器 / 键盘不会再把焦点移到把手列
     Column(
         modifier.fillMaxHeight()
             .background(Theme.sidebar)
             .then(if (remote) Modifier.border(u(2), Color.White) else Modifier)
-            .tap { ui.epgOpen = !ui.epgOpen; ui.onTouchActivity() },
+            .tap { ui.epgChannel = null; ui.epgOpen = !ui.epgOpen; ui.onTouchActivity() },
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(u(4), Alignment.CenterVertically),
     ) {
