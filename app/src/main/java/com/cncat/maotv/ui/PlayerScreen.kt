@@ -217,7 +217,7 @@ private fun MenuPanel(ui: UiState, insets: Insets) {
                 focusIndex = if (ui.remoteActive && ui.menuVisible && (ui.zone == Zone.CHANNEL || ui.zone == Zone.EPG)) ui.chFocus else -1,
                 starFocus = ui.remoteActive && ui.zone == Zone.STAR,
                 emptyText = "这里还没有频道\n在频道右侧点星标即可收藏",
-            ) { ch -> ui.selectChannel(ch) }
+            ) { ch -> ui.zone = Zone.CHANNEL; ui.selectChannel(ch) }
         }
         EPGHandle(ui, ui.epgOpen, Modifier.width(handleW))
         Box(Modifier.width(epgWidth).fillMaxHeight().clip(androidx.compose.ui.graphics.RectangleShape).background(Theme.panel)) {
