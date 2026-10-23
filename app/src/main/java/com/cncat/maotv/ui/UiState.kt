@@ -88,7 +88,6 @@ class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
     // 遥控器光标
     var remoteActive by mutableStateOf(false)
     var zone by mutableStateOf(Zone.CHANNEL)
-        private set
     var chFocus by mutableIntStateOf(0)
         private set
     var btnFocus by mutableIntStateOf(1)
