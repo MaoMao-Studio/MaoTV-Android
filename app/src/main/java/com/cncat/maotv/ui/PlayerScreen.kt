@@ -214,7 +214,7 @@ private fun MenuPanel(ui: UiState, insets: Insets) {
             ChannelList(
                 ui, list, player.current?.id, "${ui.selectedCategoryId}#${ui.menuShowCount}",
                 menuOpen = ui.menuVisible && !ui.buttonsOnly, reorderable = favSel, rowHeight = ListMetrics.ROW_HEIGHT, gold = favSel,
-                focusIndex = if (ui.remoteActive && ui.menuVisible && (ui.zone == Zone.CHANNEL || ui.zone == Zone.STAR)) ui.chFocus else -1,
+                focusIndex = if (ui.remoteActive && ui.menuVisible && (ui.zone == Zone.CHANNEL || ui.zone == Zone.EPG)) ui.chFocus else -1,
                 starFocus = ui.remoteActive && ui.zone == Zone.STAR,
                 emptyText = "这里还没有频道\n在频道右侧点星标即可收藏",
             ) { ch -> ui.selectChannel(ch) }
@@ -224,7 +224,7 @@ private fun MenuPanel(ui: UiState, insets: Insets) {
             if (epgWidth > 0.dp) {
                 // 内部固定宽度，外层裁剪 → 展开 / 收回时是“伸缩”效果
                 Box(Modifier.width(epgW).fillMaxHeight()) {
-                    EPGPanel(model, player.current, Modifier.fillMaxSize(), scrolls = ui.epgScrolls)
+                    EPGPanel(model, ui.epgChannel ?: player.current, Modifier.fillMaxSize(), scrolls = ui.epgScrolls)
                 }
             }
         }
