@@ -23,6 +23,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
@@ -95,7 +96,16 @@ fun MarqueeText(text: String, size: Number, color: Color, bold: Boolean, active:
 
 private suspend fun LazyListState.centerOn(index: Int, viewportPx: Int, rowPx: Int, animate: Boolean) {
     val off = -(viewportPx / 2 - rowPx / 2)
-    if (animate) animateScrollToItem(index, off) else scrollToItem(index, off)
+    if (!animate) { scrollToItem(index, off); return }
+    // 遥控器逐项移动：按“目标行中心 → 视口中心”的距离平滑滚动。到达列表头 / 尾时滚动自然停住（不会反复回弹抖动）。
+    // 之前用 animateScrollToItem(负偏移)：列表最后几项没法居中，目标被夹回后动画来回修正，就会整列抖动。
+    val info = layoutInfo.visibleItemsInfo.firstOrNull { it.index == index }
+    if (info != null) {
+        val delta = (info.offset + info.size / 2f) - viewportPx / 2f
+        if (kotlin.math.abs(delta) >= 1f) animateScrollBy(delta)
+    } else {
+        scrollToItem(index, off)      // 目标还不在屏幕上（大跨度跳转）：直接定位
+    }
 }
 
 // ───────────── 左侧分类 ─────────────
@@ -119,8 +129,23 @@ fun rememberCategoryMetrics(cats: List<Category>): Pair<Dp, Dp> {
 
 @Composable
 fun CategorySidebar(ui: UiState, cats: List<Category>, textW: Dp, modifier: Modifier = Modifier) {
+    val state = rememberLazyListState()
+    // 遥控器 / 键盘切换分类时，分类多到一屏放不下也要跟着滚动（保持在视口中间，头尾处自然停住）
+    LaunchedEffect(ui.selectedCategoryId) {
+        if (!ui.remoteActive) return@LaunchedEffect
+        val idx = cats.indexOfFirst { it.id == ui.selectedCategoryId }
+        val vp = state.layoutInfo.viewportSize.height
+        if (idx >= 0 && vp > 0) {
+            val info = state.layoutInfo.visibleItemsInfo.firstOrNull { it.index == idx }
+            if (info != null) {
+                val delta = (info.offset + info.size / 2f) - vp / 2f
+                if (kotlin.math.abs(delta) >= 1f) state.animateScrollBy(delta)
+            } else state.scrollToItem(idx)
+        }
+    }
     LazyColumn(
-        modifier.fillMaxHeight(),
+        state = state,
+        modifier = modifier.fillMaxHeight(),
         verticalArrangement = Arrangement.spacedBy(u(6)),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(u(8)),
     ) {
