@@ -1,761 +1,456 @@
 package com.cncat.maotv.ui
 
-import android.os.SystemClock
-import android.view.KeyEvent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.slideOutVertically
+import androidx.compose.animation.core.animateDpAsState
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.aspectRatio
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
-import androidx.compose.runtime.mutableIntStateOf
-import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.key
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.foundation.gestures.awaitEachGesture
+import androidx.compose.foundation.gestures.awaitFirstDown
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.foundation.Image
 import com.cncat.maotv.MaoApp
-import com.cncat.maotv.Phase
+import com.cncat.maotv.R
 import com.cncat.maotv.core.Category
-import com.cncat.maotv.core.Channel
-import com.cncat.maotv.core.SettingsValues
-import kotlinx.coroutines.Job
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.isActive
-import kotlinx.coroutines.launch
+import com.cncat.maotv.core.Theme
+import com.cncat.maotv.player.PlayerController
+import kotlin.math.abs
 
-/** 左侧选单里遥控器光标所在的区域 */
-enum class Zone { CATEGORY, CHANNEL, STAR, HANDLE, EPG, BUTTON }
-
-enum class PopupKind { AUDIO, SUBTITLE }
-
-enum class PortraitPage { CATEGORIES, CHANNELS }
+private const val HANDLE_W = 24f
+private const val LIST_W = 270f
+private const val EPG_W = 240f
+private val SLIDE = tween<androidx.compose.ui.unit.Dp>(250)
 
 /**
- * 播放界面的全部界面状态和操作逻辑：选单、OSD、数字选台、设置面板、遥控器光标。
- * 触摸操作由 Compose 手势直接调用这里的函数；遥控器按键由 MainActivity 转交 [onKey]（不依赖 Compose 焦点）。
+ * 播放主界面。
+ * 横屏：画面（最大的 16:9 区域居中）+ 左侧选单 + 右下角按钮 +（选单展开时）右上角时钟 + 底部 OSD。
+ * 竖屏：顶部让出系统状态栏（不与画面重叠）→ 16:9 画面 → 分类 / 频道浏览页；不显示“台号/频道名/节目”信息条。
  */
-class UiState(private val app: MaoApp, private val onExit: () -> Unit) {
+@Composable
+fun PlayerScreen(app: MaoApp, ui: UiState, applySystemBars: (portrait: Boolean, hidden: Boolean) -> Unit) {
     val model = app.model
-    val player get() = app.player
-    private val scope = model.scope
-    private val store = model.settings
+    val player = app.player
+    val sysInsets = currentInsets()
+    val cutInsets = cutoutInsets()
 
-    // ───────────── 公开状态 ─────────────
+    LaunchedEffect(Unit) { ui.startPlayback() }
 
-    /** true = 竖屏版式（由界面布局回填） */
-    var portrait by mutableStateOf(false)
-    var inPip by mutableStateOf(false)
-    /** 竖屏搜索框获得焦点时为 true：此时按键（含数字键）交给输入框，不当作遥控器操作 */
-    /** 暂停图标正在显示（含淡入 / 淡出动画期间） */
-    var pauseIconShown by mutableStateOf(false)
-    var textInputActive by mutableStateOf(false)
-
-    var menuVisible by mutableStateOf(false)
-    /** 遥控器菜单键：只显示右下角控制按钮和时钟，不弹出左侧选单 */
-    var buttonsOnly by mutableStateOf(false)
-    /** 右下角控制按钮是否显示：触摸 / 鼠标点击呼出选单时显示；遥控器确定键 / 键盘呼出时不显示（焦点也移不过去） */
-    var buttonsShown by mutableStateOf(true)
-        private set
-    var epgOpen by mutableStateOf(false)
-    /** 遥控器 / 键盘在哪个频道按右键展开节目单，就显示哪个频道的；null = 正在播放的频道（触摸点把手展开时） */
-    var epgChannel by mutableStateOf<com.cncat.maotv.core.Channel?>(null)
-    var selectedCategoryId by mutableStateOf(Category.ALL_ID)
-        private set
-    var menuShowCount by mutableIntStateOf(0)
-        private set
-
-    var osdVisible by mutableStateOf(false)
-        private set
-    var volumeOsd by mutableStateOf<Float?>(null)
-        private set
-    var exitHint by mutableStateOf(false)
-        private set
-
-    /** 数字选台：已输入的数字 */
-    var digits by mutableStateOf("")
-        private set
-
-    var diagVisible by mutableStateOf(false)
-    var settingsVisible by mutableStateOf(false)
-        private set
-    var settingsDraft by mutableStateOf(SettingsValues())
-    var settingsFocus by mutableIntStateOf(1)
-    var settingsRev by mutableIntStateOf(0)
-        private set
-    var sslConfirm by mutableStateOf(false)
-    var sslFocus by mutableIntStateOf(0)
-
-    var portraitPage by mutableStateOf(PortraitPage.CATEGORIES)
-    var portraitEPG by mutableStateOf(false)
-    var portraitShowKey by mutableIntStateOf(0)
-        private set
-
-    // 遥控器光标
-    var remoteActive by mutableStateOf(false)
-    var zone by mutableStateOf(Zone.CHANNEL)
-        private set
-    var chFocus by mutableIntStateOf(0)
-        private set
-    var btnFocus by mutableIntStateOf(1)
-        private set
-    var popup by mutableStateOf<PopupKind?>(null)
-        private set
-    var popupFocus by mutableIntStateOf(0)
-        private set
-
-    val epgScrolls = MutableSharedFlow<Float>(extraBufferCapacity = 16)
-    val diagScrolls = MutableSharedFlow<Float>(extraBufferCapacity = 16)
-
-    // ───────────── 内部 ─────────────
-
-    private var transitionJob: Job? = null
-    private var osdJob: Job? = null
-    private var volumeJob: Job? = null
-    private var digitsJob: Job? = null
-    private var exitJob: Job? = null
-    private var hideWatcher: Job? = null
-    private var hideDeadline = 0L
-    private var osdClosing = false
-    private var menuClosing = false
-
-    private var okDown = false
-    private var okLong = false
-
-    val categories get() = model.categories
-    fun channelsInSelected(): List<Channel> = model.channels(selectedCategoryId)
-
-    // ───────────── 启动 ─────────────
-
-    fun startPlayback() {
-        if (player.session != null) return
-        val all = model.channels
-        val last = store.lastChannelUrl
-        val found = all.firstOrNull { it.url == last }
-        val ch = found ?: all.firstOrNull() ?: return
-        val saved = store.lastCategoryId
-        var cat = ch.group
-        var list = model.channels(cat)
-        if (found != null && saved != null && model.categories.any { it.id == saved }) {
-            val savedList = model.channels(saved)
-            if (savedList.any { it.id == ch.id }) { cat = saved; list = savedList }
+    BoxWithConstraints(Modifier.fillMaxSize().background(Color.Black)) {
+        val portrait = maxHeight > maxWidth
+        // 竖屏：系统状态栏占位；横屏：沉浸式全屏，只避让刘海
+        val insets = if (portrait) sysInsets else cutInsets
+        SideEffect {
+            ui.portrait = portrait
+            applySystemBars(portrait, !portrait)       // 竖屏：显示状态栏；横屏：沉浸式全屏
         }
-        selectedCategoryId = cat
-        portraitPage = PortraitPage.CHANNELS
-        portraitShowKey++
-        player.play(ch, list)
-        showOSD()
-    }
+        val pip = ui.inPip
 
-    fun selectCategory(id: String) {
-        if (id == selectedCategoryId) return
-        selectedCategoryId = id
-        store.lastCategoryId = id
-        model.syncFavoriteShown()   // 取消收藏后留着的频道，切换分类时才真正消失
-    }
-
-    // ───────────── 换台 ─────────────
-
-    /** 在左侧选单里选了频道：立刻收起选单并换台；OSD 等选单收完再显示 */
-    fun selectChannel(ch: Channel) {
-        val list = channelsInSelected()
-        player.playlist = list
-        hideMenu()
-        if (ch.id == player.current?.id) return
-        player.play(ch, list)
-        showOSD()
-    }
-
-    /** 竖屏里点了某个频道：直接换台（列表一直在屏幕上） */
-    fun selectChannelPortrait(ch: Channel, list: List<Channel>) {
-        player.playlist = list
-        if (ch.id != player.current?.id) player.play(ch, list)
-        showOSD()
-    }
-
-    fun step(delta: Int) {
-        player.step(delta)
-        showOSD()
-    }
-
-    /** 触摸上下滑 / 遥控器上下键：“换台反转”打开时方向相反 */
-    fun stepByDirection(towardsNext: Boolean) {
-        val rev = store.values.reverseChannel
-        step(if (towardsNext != rev) 1 else -1)
-    }
-
-    // ───────────── 选单 ─────────────
-
-    fun toggleMenuByTap() {
-        remoteActive = false
-        if (menuVisible) hideMenu() else showMenu(touch = true)
-    }
-
-    /** 呼出选单。如果 OSD 正在显示（或正在收起），先让 OSD 收起，再展开选单。 */
-    fun showMenu(focusButtons: Boolean = false, buttonsOnly: Boolean = false, touch: Boolean = false) {
-        if (portrait) return
-        transitionJob?.cancel()
-        val mustWait = osdVisible || osdClosing
-        if (osdVisible) hideOSD()
-        transitionJob = scope.launch {
-            if (mustWait) {
-                delay(SLIDE_WAIT)
-            }
-            presentMenu(focusButtons, buttonsOnly, touch)
+        // ───── 画面：横竖屏共用同一个 AndroidView（不随版式切换重建）─────
+        val videoModifier = when {
+            pip -> Modifier.fillMaxSize()
+            portrait -> Modifier.align(Alignment.TopCenter).padding(top = insets.top).fillMaxWidth().aspectRatio(16f / 9f)
+            else -> Modifier.align(Alignment.Center).aspectRatio(16f / 9f)
         }
-    }
-
-    private fun presentMenu(focusButtons: Boolean, only: Boolean, touch: Boolean) {
-        buttonsOnly = only
-        buttonsShown = touch || focusButtons || only
-        menuShowCount++
-        menuClosing = false
-        menuVisible = true
-        popup = null
-        val list = channelsInSelected()
-        chFocus = list.indexOfFirst { it.id == player.current?.id }.coerceAtLeast(0)
-        if (focusButtons || only) { zone = Zone.BUTTON; btnFocus = 1 } else zone = Zone.CHANNEL
-        player.refreshTracks()
-        bumpHideTimer()
-    }
-
-    fun hideMenu() {
-        hideDeadline = Long.MAX_VALUE
-        hideWatcher?.cancel(); hideWatcher = null
-        popup = null
-        if (!menuVisible) return
-        menuVisible = false
-        menuClosing = true
-        scope.launch {
-            delay(SLIDE_WAIT)
-            if (menuVisible) return@launch
-            menuClosing = false
-            epgOpen = false      // 收完以后再把节目单复位（此时已在屏幕外）
-            epgChannel = null
-        }
-    }
-
-    /** 选单里有任何操作（触摸 / 按键 / 滚动）就把“8 秒后收起”的截止时间往后推 */
-    fun bumpHideTimer() {
-        if (!menuVisible) return
-        hideDeadline = SystemClock.elapsedRealtime() + MENU_AUTO_HIDE_MS
-        if (hideWatcher != null) return
-        hideWatcher = scope.launch {
-            while (isActive) {
-                delay(300)
-                if (!menuVisible) break
-                if (SystemClock.elapsedRealtime() >= hideDeadline) {
-                    hideWatcher = null
-                    hideMenu()
-                    return@launch
+        Box(videoModifier.background(Color.Black).clip(androidx.compose.ui.graphics.RectangleShape)) {
+            if (player.session != null) {
+                key(player.engineKind) {
+                    val kind = player.engineKind
+                    AndroidView(
+                        factory = { ctx -> player.engineInstance(kind).createView(ctx) },
+                        modifier = Modifier.fillMaxSize(),
+                        onRelease = { player.engineInstance(kind).releaseView() },
+                    )
                 }
             }
-            hideWatcher = null
-        }
-    }
-
-    fun onTouchActivity() {
-        remoteActive = false
-        if (menuVisible) buttonsShown = true
-        bumpHideTimer()
-    }
-
-    // ───────────── OSD ─────────────
-
-    /** 需要显示 OSD。如果选单正在显示（或正在收起），先收起选单，再显示 OSD。 */
-    fun showOSD() {
-        transitionJob?.cancel()
-        val mustWait = menuVisible || menuClosing
-        if (menuVisible) hideMenu()
-        transitionJob = scope.launch {
-            if (mustWait) delay(SLIDE_WAIT)
-            presentOSD()
-        }
-    }
-
-    private fun presentOSD() {
-        osdJob?.cancel()
-        osdClosing = false
-        osdVisible = true
-        osdJob = scope.launch {
-            // 画面还没出来就一直显示；画面出来（或播放失败）后再显示 3 秒。最多等 2 分钟兜底。
-            var waited = 0
-            while (!(player.hasPicture || player.failed) && waited < 600) {
-                delay(200)
-                waited++
+            if (portrait && !pip) {
+                // 竖屏视频区：点一下 = 暂停 / 恢复；上下滑换台、左右滑调音量
+                Box(Modifier.fillMaxSize().gestures(ui, tapToggleMenu = false))
             }
-            delay(OSD_SECONDS * 1000)
-            hideOSD()
         }
-    }
 
-    private fun hideOSD() {
-        osdJob?.cancel()
-        if (!osdVisible) return
-        osdClosing = true
-        osdVisible = false
-        scope.launch {
-            delay(SLIDE_WAIT)
-            osdClosing = false
+        if (pip) {
+            StatusOverlay(player, 200.0)
+            return@BoxWithConstraints
         }
-    }
 
-    // ───────────── 音量 ─────────────
-
-    fun setVolumeAndFlash(v: Float) {
-        player.changeVolume(v)
-        flashVolume()
-    }
-
-    fun adjustVolume(delta: Float) = setVolumeAndFlash(player.volume + delta)
-
-    private fun flashVolume() {
-        volumeJob?.cancel()
-        volumeOsd = player.volume
-        volumeJob = scope.launch {
-            delay(1600)
-            volumeOsd = null
-        }
-    }
-
-    // ───────────── 数字选台 ─────────────
-
-    private fun maxDigits(): Int = maxOf(3, model.channels.size.toString().length)
-
-    private fun enterDigit(d: Int) {
-        if (digits.isEmpty()) {
-            // 开始输入：先把左侧选单收回去
-            if (menuVisible) hideMenu()
-            popup = null
-        }
-        if (digits.length >= maxDigits()) { restartDigitsTimer(); return }
-        digits += d.toString()
-        restartDigitsTimer()
-    }
-
-    private fun restartDigitsTimer() {
-        digitsJob?.cancel()
-        digitsJob = scope.launch {
-            delay(DIGITS_WAIT_MS)
-            commitDigits()
-        }
-    }
-
-    /** 3 秒没有新按键，或按了确定键：按台号换台（前导 0 忽略：012 → 12） */
-    private fun commitDigits() {
-        digitsJob?.cancel(); digitsJob = null
-        val s = digits
-        digits = ""
-        if (s.isEmpty()) return
-        val n = s.toIntOrNull() ?: 0
-        val ch = model.channelByNumber(n)
-        if (ch == null) {
-            model.showToast("您输入的频道不存在", 3000)
-            return
-        }
-        playByNumber(ch)
-    }
-
-    fun cancelDigits() {
-        digitsJob?.cancel(); digitsJob = null
-        digits = ""
-    }
-
-    private fun playByNumber(ch: Channel) {
-        // 频道在当前分类里就沿用当前分类；否则改到“全部频道”，这样上下台、再次呼出选单都对得上
-        var list = channelsInSelected()
-        if (list.none { it.id == ch.id }) {
-            selectCategory(Category.ALL_ID)
-            list = channelsInSelected()
-        }
-        player.playlist = list
-        if (ch.id != player.current?.id) player.play(ch, list)
-        showOSD()
-    }
-
-    // ───────────── 设置 / 诊断 ─────────────
-
-    fun openSettings() {
-        hideMenu()
-        popup = null
-        settingsDraft = store.values
-        settingsFocus = 1
-        settingsVisible = true
-    }
-
-    fun closeSettings(save: Boolean) {
-        sslConfirm = false
-        settingsVisible = false
-        if (save) {
-            player.applySettings(settingsDraft)
-            settingsRev++
-        }
-    }
-
-    fun openDiagnostics() {
-        hideMenu()
-        popup = null
-        diagVisible = true
-    }
-
-    // ───────────── 音轨 / 字幕弹出菜单 ─────────────
-
-    fun openPopup(kind: PopupKind) {
-        popup = kind
-        popupFocus = popupOnIndex(kind)
-        bumpHideTimer()
-    }
-
-    fun closePopup() { popup = null }
-
-    fun popupCount(kind: PopupKind): Int = when (kind) {
-        PopupKind.AUDIO -> maxOf(1, player.audioItems.size)
-        PopupKind.SUBTITLE -> player.subtitleItems.size + 1
-    }
-
-    private fun popupOnIndex(kind: PopupKind): Int = when (kind) {
-        PopupKind.AUDIO -> player.audioItems.indexOfFirst { it.isOn }.coerceAtLeast(0)
-        PopupKind.SUBTITLE -> {
-            val i = player.subtitleItems.indexOfFirst { it.isOn }
-            if (i < 0) 0 else i + 1
-        }
-    }
-
-    fun choosePopup(kind: PopupKind, index: Int) {
-        when (kind) {
-            PopupKind.AUDIO -> if (player.audioItems.isNotEmpty()) player.selectAudio(index)
-            PopupKind.SUBTITLE -> player.selectSubtitle(if (index == 0) null else index - 1)
-        }
-        popup = null
-        bumpHideTimer()
-    }
-
-    // ───────────── 返回键 ─────────────
-
-    fun onBack() {
-        remoteActive = true
-        if (digits.isNotEmpty()) { cancelDigits(); return }      // 输入过程中返回：取消换台
-        if (sslConfirm) { sslConfirm = false; return }
-        if (settingsVisible) { closeSettings(false); return }     // 不保存
-        if (diagVisible) { diagVisible = false; return }
-        if (popup != null) { popup = null; return }
         if (portrait) {
-            if (portraitEPG) { portraitEPG = false; return }
-            if (portraitPage == PortraitPage.CHANNELS) { portraitPage = PortraitPage.CATEGORIES; return }
-        } else if (menuVisible) {
-            hideMenu(); return
-        }
-        if (exitHint) {
-            cancelExitHint()
-            onExit()
+            PortraitLayers(ui, insets, maxWidth)
         } else {
-            exitHint = true
-            exitJob?.cancel()
-            exitJob = scope.launch {
-                delay(3000)
-                exitHint = false
+            LandscapeLayers(ui, insets)
+        }
+
+        // ───── 诊断 / 设置 / 确认框（横竖屏共用）─────
+        if (ui.diagVisible) DiagnosticsPanel(ui, portrait)
+        if (ui.settingsVisible) SettingsPanel(ui, portrait)
+        ui.popup?.let { TrackPopup(ui, it, portrait, insets) }
+        if (ui.sslConfirm) SslConfirmDialog(ui)
+    }
+}
+
+// ───────────────────────── 横屏 ─────────────────────────
+
+@Composable
+private fun androidx.compose.foundation.layout.BoxScope.LandscapeLayers(ui: UiState, insets: Insets) {
+    val model = ui.model
+    val player = ui.player
+
+    // 手势层：点空白处弹出 / 收起选单；上下滑换台；左右滑调音量
+    Box(Modifier.fillMaxSize().gestures(ui, tapToggleMenu = true))
+
+    StatusOverlay(player, 280.0, hold = ui.pauseIconShown, retryFocused = ui.remoteActive && !ui.menuVisible)
+    PauseIndicator(ui, clickable = true, modifier = Modifier.align(Alignment.Center))
+
+    // 底部 OSD 区：换台信息条 → 提示条 → 音量条（自下而上）
+    BottomOsdStack(ui, widthFraction = 0.72f, maxWidthDp = 900, bottomPad = insets.bottom + u(18), showChannelInfo = true)
+
+    // 左侧选单
+    MenuPanel(ui, insets)
+
+    // 右下角按钮 + 右上角时钟：同时出现、同时消失
+    val menuOn = ui.menuVisible
+    AnimatedVisibility(
+        visible = menuOn, enter = fadeIn(tween(250)), exit = fadeOut(tween(250)),
+        modifier = Modifier.fillMaxSize(),
+    ) {
+        Box(Modifier.fillMaxSize()) {
+            if (ui.buttonsShown) ControlButtons(ui, insets, Modifier.align(Alignment.BottomEnd))
+            // 时钟：右边缘与底部按钮行的最右侧按钮对齐（用同一个 END_PADDING），
+            // 垂直中心对齐频道列表第一行高亮条中心。
+            Box(
+                Modifier.align(Alignment.TopEnd)
+                    .padding(top = insets.top + u(ListMetrics.LIST_PADDING), end = insets.right + u(ControlRow.END_PADDING))
+                    .height(u(ListMetrics.ROW_HEIGHT)),
+                contentAlignment = Alignment.CenterEnd,
+            ) { ClockBox() }
+        }
+    }
+
+    // 数字选台：右上角（此时选单已被收回，不会和时钟同时出现）
+    if (ui.digits.isNotEmpty()) {
+        Box(
+            Modifier.align(Alignment.TopEnd)
+                .padding(top = insets.top + u(14), end = insets.right + u(ControlRow.END_PADDING)),
+        ) { NumberEntryCard(ui.digits) }
+    }
+}
+
+@Composable
+private fun MenuPanel(ui: UiState, insets: Insets) {
+    val model = ui.model
+    val player = ui.player
+    val cats = model.categories
+    val (sidebarW, textW) = rememberCategoryMetrics(cats)
+    val handleW = u(HANDLE_W)
+    val listW = u(LIST_W)
+    val epgW = u(EPG_W)
+    val hidden = -(insets.left + sidebarW + listW + handleW + epgW + 40.dp)
+    val offsetX by animateDpAsState(if (ui.menuVisible && !ui.buttonsOnly) 0.dp else hidden, SLIDE, label = "menu")
+    val epgWidth by animateDpAsState(if (ui.epgOpen) epgW else 0.dp, SLIDE, label = "epg")
+    val favSel = ui.selectedCategoryId == Category.FAVORITES_ID
+
+    Row(
+        Modifier.fillMaxHeight()
+            .offset(x = offsetX)
+            .shadow(12.dp)
+            .background(Theme.sidebar.copy(alpha = 0.97f))
+            .padding(start = insets.left, top = insets.top, bottom = insets.bottom)
+            .touchMonitor { ui.onTouchActivity() }
+            .tap { ui.onTouchActivity() },          // 吃掉选单上的空白点击，不让它穿透到画面手势层
+    ) {
+        CategorySidebar(ui, cats, textW, Modifier.width(sidebarW).background(Theme.sidebar))
+        Box(Modifier.width(listW).fillMaxHeight().background(Theme.panel)) {
+            val list = remember(ui.selectedCategoryId, model.channels, model.favoriteShown) {
+                model.channels(ui.selectedCategoryId)
             }
+            ChannelList(
+                ui, list, player.current?.id, "${ui.selectedCategoryId}#${ui.menuShowCount}",
+                menuOpen = ui.menuVisible && !ui.buttonsOnly, reorderable = favSel, rowHeight = ListMetrics.ROW_HEIGHT, gold = favSel,
+                focusIndex = if (ui.remoteActive && ui.menuVisible && (ui.zone == Zone.CHANNEL || ui.zone == Zone.EPG)) ui.chFocus else -1,
+                starFocus = ui.remoteActive && ui.zone == Zone.STAR,
+                emptyText = "这里还没有频道\n在频道右侧点星标即可收藏",
+            ) { ch -> ui.selectChannel(ch) }
         }
-    }
-
-    private fun cancelExitHint() {
-        exitJob?.cancel(); exitJob = null
-        exitHint = false
-    }
-
-    // ───────────── 遥控器 ─────────────
-
-    private fun isOk(code: Int) = code == KeyEvent.KEYCODE_DPAD_CENTER || code == KeyEvent.KEYCODE_ENTER ||
-        code == KeyEvent.KEYCODE_NUMPAD_ENTER || code == KeyEvent.KEYCODE_BUTTON_A
-
-    private fun digitOf(code: Int): Int = when (code) {
-        in KeyEvent.KEYCODE_0..KeyEvent.KEYCODE_9 -> code - KeyEvent.KEYCODE_0
-        in KeyEvent.KEYCODE_NUMPAD_0..KeyEvent.KEYCODE_NUMPAD_9 -> code - KeyEvent.KEYCODE_NUMPAD_0
-        else -> -1
-    }
-
-    private fun isHandled(code: Int): Boolean = isOk(code) || digitOf(code) >= 0 || when (code) {
-        KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT,
-        KeyEvent.KEYCODE_MENU, KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN,
-        KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN, KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE,
-        KeyEvent.KEYCODE_MEDIA_PLAY, KeyEvent.KEYCODE_MEDIA_PAUSE, KeyEvent.KEYCODE_INFO -> true
-        else -> false
-    }
-
-    /** 返回 true = 已处理（Activity 不再往下传）。返回键不走这里（由 OnBackPressedCallback 统一处理）。 */
-    fun onKey(e: KeyEvent): Boolean {
-        if (model.phase != Phase.READY) return false
-        if (inPip || textInputActive) return false
-        val code = e.keyCode
-        if (!isHandled(code)) return false
-
-        if (e.action == KeyEvent.ACTION_UP) {
-            if (isOk(code)) {
-                if (okDown && !okLong) onOk()
-                okDown = false; okLong = false
-            }
-            return true
-        }
-        if (e.action != KeyEvent.ACTION_DOWN) return false
-
-        if (exitHint) cancelExitHint()
-
-        if (isOk(code)) {
-            if (e.repeatCount == 0) {
-                okDown = true; okLong = false
-                remoteActive = true
-            } else if (okDown && !okLong && e.repeatCount == 1) {
-                okLong = true
-                onLongOk()
-            }
-            return true
-        }
-        val d = digitOf(code)
-        if (d >= 0) {
-            remoteActive = true
-            if (e.repeatCount == 0 && !settingsVisible && !diagVisible && !sslConfirm) enterDigit(d)
-            return true
-        }
-        remoteActive = true
-        onDirectional(code, e.repeatCount)
-        return true
-    }
-
-    private fun onDirectional(code: Int, repeat: Int) {
-        // 正在输入台号：方向键 / 其他键不动作（返回取消、确定立即换台）
-        if (digits.isNotEmpty()) {
-            if (code == KeyEvent.KEYCODE_MENU) cancelDigits()
-            return
-        }
-        when {
-            sslConfirm -> sslKeys(code)
-            settingsVisible -> settingsKeys(code)
-            diagVisible -> diagKeys(code)
-            popup != null -> popupKeys(code)
-            portrait -> videoKeys(code, repeat)
-            menuVisible -> if (buttonsOnly) buttonsKeys(code, repeat) else menuKeys(code, repeat)
-            player.failed -> failedKeys(code, repeat)
-            else -> videoKeys(code, repeat)
-        }
-    }
-
-    private fun onOk() {
-        if (digits.isNotEmpty()) { commitDigits(); return }
-        when {
-            sslConfirm -> {
-                if (sslFocus == 1) settingsDraft = settingsDraft.copy(ignoreSsl = true)
-                sslConfirm = false
-            }
-            settingsVisible -> settingsOk()
-            diagVisible -> diagVisible = false
-            popup != null -> popup?.let { choosePopup(it, popupFocus) }
-            portrait -> {}
-            menuVisible -> menuOk()
-            player.failed -> player.reload()
-            else -> showMenu()
-        }
-    }
-
-    private fun onLongOk() {
-        // 左侧选单里、焦点在频道列表：长按确定 = 收藏 / 取消收藏当前焦点频道（键盘回车长按同理）
-        if (menuVisible && !buttonsOnly && zone == Zone.CHANNEL && digits.isEmpty() && !sslConfirm && !settingsVisible && !diagVisible && popup == null && !portrait) {
-            channelsInSelected().getOrNull(chFocus)?.let { model.toggleFavorite(it) }
-            bumpHideTimer()
-            return
-        }
-        if (digits.isNotEmpty() || sslConfirm || settingsVisible || diagVisible || popup != null || portrait) return
-        if (menuVisible) bumpHideTimer() else showMenu(buttonsOnly = true)   // 只有画面时长按确定 = 短按菜单键：仅显示右下角按钮
-    }
-
-    // —— 只有画面时 ——
-
-    private fun videoKeys(code: Int, repeat: Int) {
-        when (code) {
-            KeyEvent.KEYCODE_DPAD_UP -> if (repeat == 0) stepByDirection(towardsNext = false)
-            KeyEvent.KEYCODE_DPAD_DOWN -> if (repeat == 0) stepByDirection(towardsNext = true)
-            KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_DOWN -> if (repeat == 0) step(1)
-            KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_UP -> if (repeat == 0) step(-1)
-            KeyEvent.KEYCODE_DPAD_LEFT -> adjustVolume(-0.05f)
-            KeyEvent.KEYCODE_DPAD_RIGHT -> adjustVolume(0.05f)
-            KeyEvent.KEYCODE_MENU -> if (!portrait) showMenu(buttonsOnly = true)
-            KeyEvent.KEYCODE_INFO -> showOSD()
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (repeat == 0) player.togglePause()
-            KeyEvent.KEYCODE_MEDIA_PLAY -> if (player.isPaused) player.togglePause()
-            KeyEvent.KEYCODE_MEDIA_PAUSE -> if (!player.isPaused) player.togglePause()
-        }
-    }
-
-    /** 播放失败界面：焦点在“重试”按钮上；方向键在按钮间选择（目前仅一个），确定键 = 点击；上下仍可换台 */
-    private fun failedKeys(code: Int, repeat: Int) {
-        when (code) {
-            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {}
-            else -> videoKeys(code, repeat)
-        }
-    }
-
-    /** 仅按钮模式（遥控器菜单键）：左右选按钮，确定点击，菜单键收起，上下换台 */
-    private fun buttonsKeys(code: Int, repeat: Int) {
-        bumpHideTimer()
-        when (code) {
-            KeyEvent.KEYCODE_MENU -> hideMenu()
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (repeat == 0) player.togglePause()
-            KeyEvent.KEYCODE_DPAD_LEFT -> btnFocus = (btnFocus - 1).coerceAtLeast(0)
-            KeyEvent.KEYCODE_DPAD_RIGHT -> btnFocus = (btnFocus + 1).coerceAtMost(BUTTON_COUNT - 1)
-            KeyEvent.KEYCODE_DPAD_UP -> if (repeat == 0) stepByDirection(towardsNext = false)
-            KeyEvent.KEYCODE_DPAD_DOWN -> if (repeat == 0) stepByDirection(towardsNext = true)
-            KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_PAGE_DOWN -> if (repeat == 0) step(1)
-            KeyEvent.KEYCODE_CHANNEL_DOWN, KeyEvent.KEYCODE_PAGE_UP -> if (repeat == 0) step(-1)
-        }
-    }
-
-    // —— 左侧选单 ——
-
-    private fun menuKeys(code: Int, repeat: Int) {
-        bumpHideTimer()
-        val cats = categories
-        when (code) {
-            KeyEvent.KEYCODE_MENU -> {
-                if (!buttonsShown) hideMenu()     // 遥控器 / 键盘呼出的选单没有右下角按钮：菜单键直接收起选单
-                else if (zone == Zone.BUTTON) zone = Zone.CHANNEL else { zone = Zone.BUTTON; btnFocus = 1 }
-            }
-            KeyEvent.KEYCODE_MEDIA_PLAY_PAUSE -> if (repeat == 0) player.togglePause()
-            KeyEvent.KEYCODE_DPAD_UP, KeyEvent.KEYCODE_DPAD_DOWN, KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_PAGE_DOWN,
-            KeyEvent.KEYCODE_CHANNEL_UP, KeyEvent.KEYCODE_CHANNEL_DOWN -> {
-                val dir = when (code) {
-                    KeyEvent.KEYCODE_DPAD_UP -> -1
-                    KeyEvent.KEYCODE_DPAD_DOWN -> 1
-                    KeyEvent.KEYCODE_PAGE_UP, KeyEvent.KEYCODE_CHANNEL_DOWN -> -8
-                    else -> 8
+        EPGHandle(ui, ui.epgOpen, Modifier.width(handleW))
+        Box(Modifier.width(epgWidth).fillMaxHeight().clip(androidx.compose.ui.graphics.RectangleShape).background(Theme.panel)) {
+            if (epgWidth > 0.dp) {
+                // 内部固定宽度，外层裁剪 → 展开 / 收回时是“伸缩”效果
+                Box(Modifier.width(epgW).fillMaxHeight()) {
+                    EPGPanel(model, ui.epgChannel ?: player.current, Modifier.fillMaxSize(), scrolls = ui.epgScrolls)
                 }
-                when (zone) {
-                    Zone.CATEGORY -> {
-                        val i = cats.indexOfFirst { it.id == selectedCategoryId }.coerceAtLeast(0)
-                        val n = (i + dir.coerceIn(-1, 1)).coerceIn(0, (cats.size - 1).coerceAtLeast(0))
-                        if (n != i && cats.isNotEmpty()) {
-                            selectCategory(cats[n].id)
-                            val list = channelsInSelected()
-                            chFocus = list.indexOfFirst { it.id == player.current?.id }.coerceAtLeast(0)
-                        }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ControlButtons(ui: UiState, insets: Insets, modifier: Modifier) {
+    val player = ui.player
+    Row(
+        modifier.padding(end = insets.right + u(ControlRow.END_PADDING), bottom = insets.bottom + u(ControlRow.BOTTOM_PADDING)),
+        horizontalArrangement = Arrangement.spacedBy(u(ControlRow.BUTTON_GAP)),
+    ) {
+        val icons = listOf(if (player.isPaused) Ico.PLAY else Ico.PAUSE, Ico.WAVEFORM, Ico.CAPTIONS, Ico.GEAR, Ico.INFO)
+        icons.forEachIndexed { i, ico ->
+            val focus = ui.remoteActive && ui.zone == Zone.BUTTON && ui.btnFocus == i && ui.popup == null
+            Box(
+                Modifier.size(u(ControlRow.BUTTON_SIZE))
+                    .glassBox(CircleShape)
+                    .then(if (focus) Modifier.border(u(2), Color.White, CircleShape) else Modifier)
+                    .tap { ui.pressButton(i) },
+                contentAlignment = Alignment.Center,
+            ) { Icon(ico, u(20), Color.White) }
+        }
+    }
+}
+
+// ───────────────────────── 竖屏 ─────────────────────────
+
+@Composable
+private fun PortraitLayers(ui: UiState, insets: Insets, width: androidx.compose.ui.unit.Dp) {
+    val player = ui.player
+    val videoH = width * 9f / 16f
+    val top = insets.top + videoH
+
+    // 视频区内的状态 / OSD：只放音量条、提示条（竖屏不显示台号 + 频道名 + EPG 信息条）
+    Box(Modifier.padding(top = insets.top).fillMaxWidth().height(videoH)) {
+        StatusOverlay(player, 200.0, compact = true, hold = ui.pauseIconShown, retryFocused = ui.remoteActive && !ui.menuVisible)
+        PauseIndicator(ui, clickable = false, modifier = Modifier.align(Alignment.Center))
+        BottomOsdStack(ui, widthFraction = 1f, maxWidthDp = 2000, bottomPad = u(8), showChannelInfo = false, sidePad = u(8))
+        if (ui.digits.isNotEmpty()) {
+            Box(Modifier.align(Alignment.TopEnd).padding(top = u(10), end = u(10))) { NumberEntryCard(ui.digits) }
+        }
+    }
+
+    // 下半部分：分类 / 频道浏览
+    PortraitBrowser(ui, Modifier.fillMaxSize().padding(top = top, bottom = insets.bottom))
+
+    if (ui.portraitEPG) PortraitEPGView(ui, insets)
+}
+
+// ───────────────────────── 公共部件 ─────────────────────────
+
+/** 底部 OSD 区：自下而上 = 换台信息条（仅横屏）→ 提示条 → 退出提示 → 音量条 */
+@Composable
+private fun androidx.compose.foundation.layout.BoxScope.BottomOsdStack(
+    ui: UiState,
+    widthFraction: Float,
+    maxWidthDp: Int,
+    bottomPad: androidx.compose.ui.unit.Dp,
+    showChannelInfo: Boolean,
+    sidePad: androidx.compose.ui.unit.Dp = 0.dp,
+) {
+    val model = ui.model
+    val enter = fadeIn(tween(200)) + slideInVertically(tween(250)) { it / 2 }
+    val exit = fadeOut(tween(200)) + slideOutVertically(tween(250)) { it / 2 }
+    Column(
+        Modifier.align(Alignment.BottomCenter)
+            .fillMaxWidth(widthFraction).widthIn(max = u(maxWidthDp))
+            .padding(start = sidePad, end = sidePad, bottom = bottomPad),
+        verticalArrangement = Arrangement.spacedBy(u(10), Alignment.Bottom),
+        horizontalAlignment = Alignment.CenterHorizontally,
+    ) {
+        val vol = ui.volumeOsd
+        AnimatedVisibility(vol != null, enter = enter, exit = exit) { VolumeOSD(vol ?: 0f) }
+
+        val toast = model.toast
+        var lastToast by remember { mutableStateOf("") }
+        if (toast != null) lastToast = toast
+        AnimatedVisibility(toast != null, enter = enter, exit = exit) { ToastOSD(lastToast) }
+
+        AnimatedVisibility(ui.exitHint, enter = enter, exit = exit) { ToastOSD("再按一次退出猫TV") }
+
+        if (showChannelInfo) {
+            val ch = ui.player.current
+            AnimatedVisibility(ui.osdVisible && ch != null, enter = enter, exit = exit) {
+                if (ch != null) ChannelOSD(ch, model)
+            }
+        }
+    }
+}
+
+/** 缓冲 / 重试 / 失败提示 */
+@Composable
+private fun StatusOverlay(player: PlayerController, logoWidth: Double, compact: Boolean = false, hold: Boolean = false, retryFocused: Boolean = false) {
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+        if (player.failed) {
+            Column(
+                Modifier.background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(u(16))).padding(u(22)),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(u(if (compact) 6 else 12)),
+            ) {
+                Icon(Ico.WARNING, u(30), Theme.gold)
+                Txt("播放失败", 16, weight = FontWeight.SemiBold)
+                Txt("已重试 ${PlayerController.MAX_RETRIES} 次仍无法播放", 12, color = Color.White.copy(alpha = 0.6f))
+                Box(
+                    Modifier.clip(RoundedCornerShape(50)).background(Theme.purpleA)
+                        .then(if (retryFocused) Modifier.border(u(2), Color.White, RoundedCornerShape(50)) else Modifier)
+                        .tap { player.reload() }.padding(horizontal = u(26), vertical = u(8)),
+                ) { Txt("重试", 15, weight = FontWeight.SemiBold) }
+            }
+        } else if (player.isBuffering && !hold && !player.isPaused) {
+            Box(
+                Modifier.fillMaxSize().then(if (!player.hasPicture) Modifier.background(Color.Black) else Modifier),
+                contentAlignment = Alignment.Center,
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(u(if (compact) 8 else 14))) {
+                    if (!player.hasPicture && !player.resuming) {
+                        Image(
+                            painterResource(R.drawable.logo_text), null,
+                            modifier = Modifier.width(u(logoWidth)), contentScale = ContentScale.FillWidth,
+                        )
                     }
-                    Zone.CHANNEL, Zone.STAR -> {
-                        val size = channelsInSelected().size
-                        if (size > 0) chFocus = (chFocus + dir).coerceIn(0, size - 1)
+                    Spinner(if (compact) 22 else 30)
+                    Txt(
+                        "${if (player.resuming) "正在恢复播放" else if (player.hasPicture) "缓冲中" else "频道加载中"}（${player.speedText}）…", 13,
+                        color = Color.White.copy(alpha = 0.85f),
+                    )
+                    player.retryText?.let {
+                        Txt(
+                            it, 12, color = Color.White.copy(alpha = 0.7f),
+                            modifier = Modifier.background(Color.Black.copy(alpha = 0.5f), RoundedCornerShape(50))
+                                .padding(horizontal = u(12), vertical = u(4)),
+                        )
                     }
-                    Zone.EPG -> epgScrolls.tryEmit(dir * 48f)
-                    Zone.BUTTON -> if (dir < 0) zone = Zone.CHANNEL
-                    Zone.HANDLE -> {}
-                }
-            }
-            KeyEvent.KEYCODE_DPAD_LEFT -> when (zone) {
-                Zone.CATEGORY -> {}
-                Zone.CHANNEL -> zone = Zone.CATEGORY
-                Zone.STAR, Zone.HANDLE -> zone = Zone.CHANNEL
-                Zone.EPG -> { epgOpen = false; epgChannel = null; zone = Zone.CHANNEL }   // 遥控器 / 键盘：左键直接收起节目单，焦点回频道列表
-                Zone.BUTTON -> btnFocus = (btnFocus - 1).coerceAtLeast(0)
-            }
-            KeyEvent.KEYCODE_DPAD_RIGHT -> when (zone) {
-                Zone.CATEGORY -> zone = Zone.CHANNEL
-                Zone.CHANNEL -> channelsInSelected().getOrNull(chFocus)?.let {   // 遥控器 / 键盘：右键直接展开“当前焦点频道”的节目单
-                    epgChannel = it; epgOpen = true; zone = Zone.EPG
-                }
-                Zone.STAR -> zone = Zone.CHANNEL
-                Zone.HANDLE -> zone = Zone.CHANNEL
-                Zone.EPG -> {}
-                Zone.BUTTON -> btnFocus = (btnFocus + 1).coerceAtMost(BUTTON_COUNT - 1)
-            }
-        }
-    }
-
-    private fun menuOk() {
-        bumpHideTimer()
-        when (zone) {
-            Zone.CATEGORY -> zone = Zone.CHANNEL
-            Zone.CHANNEL -> channelsInSelected().getOrNull(chFocus)?.let { selectChannel(it) }
-            Zone.STAR -> channelsInSelected().getOrNull(chFocus)?.let { model.toggleFavorite(it) }
-            Zone.HANDLE -> epgOpen = !epgOpen
-            Zone.EPG -> {}
-            Zone.BUTTON -> pressButton(btnFocus)
-        }
-    }
-
-    /** 底部按钮：0 暂停/播放 1 音轨 2 字幕 3 设置 4 诊断 */
-    fun pressButton(index: Int) {
-        bumpHideTimer()
-        when (index) {
-            0 -> player.togglePause()
-            1 -> openPopup(PopupKind.AUDIO)
-            2 -> openPopup(PopupKind.SUBTITLE)
-            3 -> openSettings()
-            4 -> openDiagnostics()
-        }
-    }
-
-    // —— 音轨 / 字幕弹出菜单 ——
-
-    private fun popupKeys(code: Int) {
-        val kind = popup ?: return
-        bumpHideTimer()
-        val n = popupCount(kind)
-        when (code) {
-            KeyEvent.KEYCODE_DPAD_UP -> popupFocus = (popupFocus - 1).coerceAtLeast(0)
-            KeyEvent.KEYCODE_DPAD_DOWN -> popupFocus = (popupFocus + 1).coerceAtMost(n - 1)
-            KeyEvent.KEYCODE_MENU -> popup = null
-        }
-    }
-
-    // —— 诊断 ——
-
-    private fun diagKeys(code: Int) {
-        when (code) {
-            KeyEvent.KEYCODE_DPAD_UP -> diagScrolls.tryEmit(-120f)
-            KeyEvent.KEYCODE_DPAD_DOWN -> diagScrolls.tryEmit(120f)
-            KeyEvent.KEYCODE_PAGE_UP -> diagScrolls.tryEmit(-400f)
-            KeyEvent.KEYCODE_PAGE_DOWN -> diagScrolls.tryEmit(400f)
-            KeyEvent.KEYCODE_MENU -> diagVisible = false
-        }
-    }
-
-    // —— 设置面板 ——
-
-    private fun settingsKeys(code: Int) {
-        val rows = settingsRows(this).filter { it !is SRow.Header }
-        val last = rows.size       // 0 = 保存设置，1..n = 各项
-        when (code) {
-            KeyEvent.KEYCODE_DPAD_UP -> settingsFocus = (settingsFocus - 1).coerceAtLeast(0)
-            KeyEvent.KEYCODE_DPAD_DOWN -> settingsFocus = (settingsFocus + 1).coerceAtMost(last)
-            KeyEvent.KEYCODE_MENU -> closeSettings(true)
-            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_RIGHT -> {
-                val row = rows.getOrNull(settingsFocus - 1) ?: return
-                val dir = if (code == KeyEvent.KEYCODE_DPAD_LEFT) -1 else 1
-                when (row) {
-                    is SRow.Toggle -> row.set(dir > 0)
-                    is SRow.Segment -> row.set((row.index + dir).coerceIn(0, row.options.size - 1))
-                    is SRow.Slider -> row.set((row.value + dir * row.step).coerceIn(row.min, row.max))
-                    is SRow.Header -> {}
                 }
             }
         }
     }
+}
 
-    private fun settingsOk() {
-        if (settingsFocus == 0) { closeSettings(true); return }
-        val rows = settingsRows(this).filter { it !is SRow.Header }
-        when (val row = rows.getOrNull(settingsFocus - 1) ?: return) {
-            is SRow.Toggle -> row.set(!row.on)
-            is SRow.Segment -> row.set((row.index + 1) % row.options.size)
-            is SRow.Slider -> row.reset()
-            is SRow.Header -> {}
+/**
+ * 暂停图标：暂停时由大变小淡入（1.8 倍 → 1 倍），恢复时由小变大淡出（1 倍 → 1.8 倍）。
+ * 动画没结束前 ui.pauseIconShown 一直为 true，加载界面（“正在恢复播放…”）等它播完才出现。
+ * 横屏下点图标 = 恢复播放（竖屏由整个画面区域的点击处理）。
+ */
+@Composable
+private fun PauseIndicator(ui: UiState, clickable: Boolean, modifier: Modifier = Modifier) {
+    val paused = ui.player.isPaused
+    val prog = remember { Animatable(0f) }
+    LaunchedEffect(paused) {
+        if (paused) {
+            ui.pauseIconShown = true
+            prog.animateTo(1f, tween(240))
+        } else {
+            prog.animateTo(0f, tween(240))
+            ui.pauseIconShown = false
         }
     }
+    androidx.compose.runtime.DisposableEffect(Unit) { onDispose { ui.pauseIconShown = false } }
+    val p = prog.value
+    if (p > 0f) {
+        Box(
+            modifier.size(u(64))
+                .graphicsLayer {
+                    val sc = 1f + 0.8f * (1f - p)
+                    scaleX = sc; scaleY = sc; alpha = p
+                }
+                .clip(CircleShape).background(Color.Black.copy(alpha = 0.55f))
+                .then(if (clickable && paused) Modifier.tap { ui.player.togglePause() } else Modifier),
+            contentAlignment = Alignment.Center,
+        ) { Icon(Ico.PAUSE, u(26), Color.White) }
+    }
+}
 
-    private fun sslKeys(code: Int) {
-        when (code) {
-            KeyEvent.KEYCODE_DPAD_LEFT, KeyEvent.KEYCODE_DPAD_UP -> sslFocus = 0
-            KeyEvent.KEYCODE_DPAD_RIGHT, KeyEvent.KEYCODE_DPAD_DOWN -> sslFocus = 1
+/**
+ * 画面手势：点击（横屏切换选单）；上下滑换台（滑动 > 60px）；左右滑调音量（横扫半个宽度 = 100%）。
+ */
+private fun Modifier.gestures(ui: UiState, tapToggleMenu: Boolean): Modifier = this
+    .pointerInput(tapToggleMenu) {
+        detectTapGestures {
+            ui.remoteActive = false
+            if (tapToggleMenu) ui.toggleMenuByTap() else ui.player.togglePause()
         }
     }
+    .pointerInput(Unit) {
+        var total = Offset.Zero
+        var horizontal = false
+        var startVolume = 1f
+        var decided = false
+        detectDragGestures(
+            onDragStart = {
+                total = Offset.Zero; decided = false
+                startVolume = ui.player.volume
+            },
+            onDrag = { change, drag ->
+                change.consume()
+                total += drag
+                if (!decided) {
+                    horizontal = abs(total.x) > abs(total.y)
+                    decided = true
+                }
+                if (horizontal) {
+                    val delta = total.x / (size.width * 0.5f).coerceAtLeast(1f)
+                    ui.setVolumeAndFlash(startVolume + delta)
+                }
+            },
+            onDragEnd = {
+                if (decided && !horizontal && abs(total.y) > 60f) {
+                    // 下滑 = 下一个台，上滑 = 上一个台（与 iOS 版相同；“换台反转”打开时相反）
+                    ui.stepByDirection(towardsNext = total.y > 0)
+                }
+                decided = false
+            },
+            onDragCancel = { decided = false },
+        )
+    }
 
-    // ───────────── 其他 ─────────────
-
-    companion object {
-        const val MENU_AUTO_HIDE_MS = 8000L
-        const val OSD_SECONDS = 3L
-        const val SLIDE_WAIT = 300L
-        const val DIGITS_WAIT_MS = 3000L
-        const val BUTTON_COUNT = 5
+/** 监听选单上的任何触摸（不消费事件）：选单里有操作就让“8 秒自动收起”重新计时 */
+private fun Modifier.touchMonitor(onTouch: () -> Unit): Modifier = this.pointerInput(Unit) {
+    awaitEachGesture {
+        awaitFirstDown(requireUnconsumed = false, pass = PointerEventPass.Initial)
+        onTouch()
+        do {
+            val e = awaitPointerEvent(PointerEventPass.Initial)
+            onTouch()
+        } while (e.changes.any { it.pressed })
     }
 }
