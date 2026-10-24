@@ -41,7 +41,12 @@ object PgsStats {
     @Volatile var sets = 0
     @Volatile var lastSetUs = -1L
     @Volatile var dropped = 0
-    fun reset() { tracks = 0; bytes = 0; sets = 0; lastSetUs = -1; dropped = 0 }
+    @Volatile var path = "?"
+    private val seen = LinkedHashSet<String>()
+    /** PMT 里出现过的流类型（0x1b=H264 0x24=H265 0x0f=AAC 0x06=私有数据 0x90=PGS ...） */
+    fun note(s: String) { synchronized(seen) { seen.add(s) } }
+    fun streams(): String = synchronized(seen) { seen.joinToString(" ") }
+    fun reset() { tracks = 0; bytes = 0; sets = 0; lastSetUs = -1; dropped = 0; path = "?"; synchronized(seen) { seen.clear() } }
 }
 
 private class PgsTsReader(private val language: String?) : ElementaryStreamReader {
@@ -119,7 +124,12 @@ private class PgsAwareReaderFactory(flags: Int, captions: List<Format> = emptyLi
 
     override fun createInitialPayloadReaders(): SparseArray<TsPayloadReader> = base.createInitialPayloadReaders()
 
-    override fun createPayloadReader(streamType: Int, esInfo: TsPayloadReader.EsInfo): TsPayloadReader? =
+    override fun createPayloadReader(streamType: Int, esInfo: TsPayloadReader.EsInfo): TsPayloadReader? {
+        PgsStats.note("0x%02x/%s".format(streamType, esInfo.language ?: "-"))
+        return createReader(streamType, esInfo)
+    }
+
+    private fun createReader(streamType: Int, esInfo: TsPayloadReader.EsInfo): TsPayloadReader? =
         if (streamType == STREAM_TYPE_PGS) PesReader(PgsTsReader(esInfo.language))
         else base.createPayloadReader(streamType, esInfo)
 
@@ -233,6 +243,7 @@ class MaoHlsExtractorFactory(private val tsFlags: Int) : HlsExtractorFactory {
         sniffingExtractorInput.resetPeekPosition()
         val isTs = try { ts.sniff(sniffingExtractorInput) } catch (e: Exception) { false }
         sniffingExtractorInput.resetPeekPosition()
+        PgsStats.path = if (isTs) "HLS-自有TS" else "HLS-默认"
         if (isTs) {
             return BundledHlsMediaChunkExtractor(MultiAudioTsExtractor(ts, mainAudioId), format, timestampAdjuster)
         }

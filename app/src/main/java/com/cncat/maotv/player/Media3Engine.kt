@@ -256,6 +256,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         // m3u8 能拿到“未来数据”：约 1 秒就起播，之后继续缓存；TS 等连续流：缓存到设定值再起播
         loadControl?.fastStart = guessKind(url) == Kind.HLS
         lastErrorText = null
+        t0 = android.os.SystemClock.elapsedRealtime(); synchronized(evlog) { evlog.clear() }
         PgsStats.reset(); cueCallbacks = 0; lastCueCount = 0; lastCueBitmap = false
         hints = M3u8Hints.EMPTY
         val seq = hintSeq.incrementAndGet()
@@ -451,6 +452,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
     override fun selectSubtitle(index: Int?) {
         val ts = trackSelector ?: return
         val r = if (index != null) textRefs.getOrNull(index) else null
+        ev("选字幕 ${index ?: "关闭"}")
         if (r == null) {
             // 关闭 = 只隐藏；轨道保持选中，之后再打开不会触发重新拉流
             subtitleHidden = true
@@ -471,7 +473,12 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
     // ───────────── 监听 ─────────────
 
     private val listener = object : Player.Listener {
+        override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
+            ev("位置跳变 原因$reason ${oldPosition.positionMs / 1000}→${newPosition.positionMs / 1000}秒")
+        }
+
         override fun onPlaybackStateChanged(state: Int) {
+            ev("状态 " + when (state) { Player.STATE_BUFFERING -> "缓冲"; Player.STATE_READY -> "就绪"; Player.STATE_ENDED -> "结束"; else -> "空闲" })
             when (state) {
                 Player.STATE_BUFFERING -> onEvent?.invoke(EngineEvent.Loading)
                 Player.STATE_READY -> onEvent?.invoke(EngineEvent.Playing)
@@ -486,6 +493,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         }
 
         override fun onTracksChanged(tracks: Tracks) {
+            ev("轨道变化 音${tracks.groups.count { it.type == C.TRACK_TYPE_AUDIO }} 字${tracks.groups.count { it.type == C.TRACK_TYPE_TEXT }} 字幕选中=${tracks.groups.any { it.type == C.TRACK_TYPE_TEXT && it.isSelected }}")
             onEvent?.invoke(EngineEvent.TracksChanged)
         }
 
@@ -545,6 +553,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
                 d.stackTrace.take(3).forEach { append(" @").append(it.className.substringAfterLast('.')).append('.').append(it.methodName) }
             }
             val code = error.errorCode
+            ev("错误 ${error.errorCodeName}")
 
             // 直播窗口落后（缓冲耗尽后的追赶）：原地重新准备
             if (code == PlaybackException.ERROR_CODE_BEHIND_LIVE_WINDOW) {
@@ -607,6 +616,14 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         }
     }
     @Volatile private var lastLoadError: String? = null
+    private val evlog = java.util.ArrayDeque<String>()
+    @Volatile private var t0 = 0L
+    private fun ev(s: String) {
+        synchronized(evlog) {
+            evlog.addLast("%.1fs %s".format((android.os.SystemClock.elapsedRealtime() - t0) / 1000.0, s))
+            while (evlog.size > 14) evlog.removeFirst()
+        }
+    }
     @Volatile private var cueCallbacks = 0
     @Volatile private var lastCueCount = 0
     @Volatile private var lastCueBitmap = false
@@ -660,6 +677,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         player?.currentTracks?.groups?.filter { it.type == C.TRACK_TYPE_TEXT }?.forEachIndexed { gi, g ->
             for (i in 0 until g.length) {
                 val f = g.getTrackFormat(i)
+                sub.add(DiagRow("字幕${gi + 1}详情", "id=${f.id} / 容器=${f.containerMimeType} / 编码=${f.codecs} / 语言=${f.language} / 名称=${f.label}"))
                 sub.add(DiagRow("字幕${gi + 1}格式", "${f.sampleMimeType ?: "?"}${if (g.isTrackSupported(i)) "" else "（不支持）"}"))
             }
         }
@@ -686,6 +704,8 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         if (p != null) rows.add(DiagRow("缓冲余量", String.format(Locale.US, "%.1f 秒", p.totalBufferedDuration / 1000.0)))
         lastErrorText?.let { rows.add(DiagRow("最近播放器错误", it)) }
         lastLoadError?.let { rows.add(DiagRow("最近加载错误", it)) }
+        rows.add(DiagRow("TS流类型", "${PgsStats.path} / ${PgsStats.streams().ifEmpty { "无" }}"))
+        synchronized(evlog) { rows.add(DiagRow("事件记录", evlog.joinToString("\n"))) }
         rows.add(DiagRow("PGS读取器", "轨道 ${PgsStats.tracks} / 收到 ${PgsStats.bytes} 字节 / 完整显示集 ${PgsStats.sets} / 丢弃 ${PgsStats.dropped} / 最近 ${if (PgsStats.lastSetUs < 0) "无" else "%.1f 秒".format(PgsStats.lastSetUs / 1e6)}"))
         rows.add(DiagRow("字幕输出", "回调 $cueCallbacks 次 / 当前 $lastCueCount 条${if (lastCueBitmap) "（位图）" else ""} / 隐藏 ${if (subtitleHidden) "是" else "否"} / 播放位置 ${"%.1f".format((player?.currentPosition ?: 0) / 1000.0)} 秒"))
         try {
@@ -737,3 +757,4 @@ class MaoLoadControl(
         return super.shouldStartPlayback(parameters)
     }
 }
+
