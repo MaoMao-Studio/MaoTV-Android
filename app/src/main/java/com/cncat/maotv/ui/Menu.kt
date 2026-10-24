@@ -427,8 +427,7 @@ fun ChannelList(
                 val idx = shown.indexOf(ch)
                 val dragged = drag.key == ch.id
                 val selected = ch.id == currentId
-                // 位移动画只用在“我的收藏”拖动排序；其余列表不要，否则滚动被纠正时行会跟着“弹”一下
-                val animMod = if (dragged || !reorderable) Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = null)
+                val animMod = if (dragged) Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = null)
                 else Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)
                 // 遥控器 / 键盘操作时：高亮条跟着焦点走（焦点所在行高亮，正在播放的那行不再单独高亮）；触屏仍高亮正在播放的频道
                 val inMenu = !ui.portrait
