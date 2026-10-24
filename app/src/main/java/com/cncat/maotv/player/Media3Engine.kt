@@ -256,6 +256,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         // m3u8 能拿到“未来数据”：约 1 秒就起播，之后继续缓存；TS 等连续流：缓存到设定值再起播
         loadControl?.fastStart = guessKind(url) == Kind.HLS
         lastErrorText = null
+        PgsStats.reset(); cueCallbacks = 0; lastCueCount = 0; lastCueBitmap = false
         hints = M3u8Hints.EMPTY
         val seq = hintSeq.incrementAndGet()
         M3u8Hints.fetch(url) { h ->
@@ -499,6 +500,9 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         }
 
         override fun onCues(cueGroup: CueGroup) {
+            cueCallbacks++
+            lastCueCount = cueGroup.cues.size
+            lastCueBitmap = cueGroup.cues.any { it.bitmap != null }
             val sv = subtitleView ?: return
             if (subtitleHidden) { sv.setCues(emptyList()); return }
             val em = SubtitleStyle.LETTER_SPACING_PX / SubtitleStyle.SIZE_PX
@@ -603,6 +607,9 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         }
     }
     @Volatile private var lastLoadError: String? = null
+    @Volatile private var cueCallbacks = 0
+    @Volatile private var lastCueCount = 0
+    @Volatile private var lastCueBitmap = false
     /** 字幕“关闭”只隐藏、不取消选中轨道：新启用从未读取过的稀疏轨（PGS）会让 Media3 重新拉流 */
     @Volatile private var subtitleHidden = false
 
@@ -679,6 +686,16 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         if (p != null) rows.add(DiagRow("缓冲余量", String.format(Locale.US, "%.1f 秒", p.totalBufferedDuration / 1000.0)))
         lastErrorText?.let { rows.add(DiagRow("最近播放器错误", it)) }
         lastLoadError?.let { rows.add(DiagRow("最近加载错误", it)) }
+        rows.add(DiagRow("PGS读取器", "轨道 ${PgsStats.tracks} / 收到 ${PgsStats.bytes} 字节 / 完整显示集 ${PgsStats.sets} / 丢弃 ${PgsStats.dropped} / 最近 ${if (PgsStats.lastSetUs < 0) "无" else "%.1f 秒".format(PgsStats.lastSetUs / 1e6)}"))
+        rows.add(DiagRow("字幕输出", "回调 $cueCallbacks 次 / 当前 $lastCueCount 条${if (lastCueBitmap) "（位图）" else ""} / 隐藏 ${if (subtitleHidden) "是" else "否"} / 播放位置 ${"%.1f".format((player?.currentPosition ?: 0) / 1000.0)} 秒"))
+        try {
+            val pl = player
+            if (pl != null) for (i in 0 until pl.rendererCount) {
+                val r = pl.getRenderer(i)
+                val kind = when (pl.getRendererType(i)) { C.TRACK_TYPE_VIDEO -> "视频"; C.TRACK_TYPE_AUDIO -> "音频"; C.TRACK_TYPE_TEXT -> "字幕"; else -> "其他" }
+                if (r.state != 0) rows.add(DiagRow("渲染器·$kind", "${if (r.state == 2) "运行" else "已启用"} / 就绪 ${if (r.isReady) "是" else "否"} / 结束 ${if (r.isEnded) "是" else "否"}"))
+            }
+        } catch (_: Throwable) { }
         return rows
     }
 
