@@ -259,7 +259,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         loadControl?.fastStart = guessKind(url) == Kind.HLS
         lastErrorText = null
         t0 = android.os.SystemClock.elapsedRealtime(); synchronized(evlog) { evlog.clear() }
-        PgsStats.reset(); cueCallbacks = 0; lastCueCount = 0; lastCueBitmap = false
+        loadCount = 0; PgsStats.reset(); cueCallbacks = 0; lastCueCount = 0; lastCueBitmap = false
         hints = M3u8Hints.EMPTY
         val seq = hintSeq.incrementAndGet()
         M3u8Hints.fetch(url) { h ->
@@ -612,6 +612,19 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
             eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long,
         ) { audioDecoderName = decoderName }
 
+        override fun onLoadCompleted(
+            eventTime: AnalyticsListener.EventTime,
+            loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo,
+            mediaLoadData: androidx.media3.exoplayer.source.MediaLoadData,
+        ) {
+            if (mediaLoadData.dataType != C.DATA_TYPE_MEDIA) return
+            loadCount++
+            lastLoadBytes = loadEventInfo.bytesLoaded
+            lastLoadMs = loadEventInfo.loadDurationMs
+            lastLoadSegMs = (mediaLoadData.mediaEndTimeMs - mediaLoadData.mediaStartTimeMs).coerceAtLeast(0)
+            ev("分片 ${loadEventInfo.bytesLoaded / 1024}KB/${loadEventInfo.loadDurationMs}ms/时长${lastLoadSegMs / 1000}s")
+        }
+
         override fun onLoadError(
             eventTime: AnalyticsListener.EventTime,
             loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo,
@@ -631,6 +644,10 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
             while (evlog.size > 14) evlog.removeFirst()
         }
     }
+    @Volatile private var loadCount = 0
+    @Volatile private var lastLoadBytes = 0L
+    @Volatile private var lastLoadMs = 0L
+    @Volatile private var lastLoadSegMs = 0L
     @Volatile private var cueCallbacks = 0
     @Volatile private var lastCueCount = 0
     @Volatile private var lastCueBitmap = false
@@ -712,6 +729,12 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         lastErrorText?.let { rows.add(DiagRow("最近播放器错误", it)) }
         lastLoadError?.let { rows.add(DiagRow("最近加载错误", it)) }
         rows.add(DiagRow("TS流类型", "${PgsStats.path} / ${PgsStats.streams().ifEmpty { "无" }}"))
+        player?.let { pl ->
+            val speed = if (lastLoadMs > 0) "%.0f".format(lastLoadBytes * 8.0 / lastLoadMs) else "?"   // 字节*8/毫秒 = kbps
+            val rate = if (lastLoadSegMs > 0 && lastLoadBytes > 0) "%.0f".format(lastLoadBytes * 8.0 / lastLoadSegMs) else "?"
+            rows.add(DiagRow("分片下载", "共 $loadCount 个 / 最近 ${lastLoadBytes / 1024}KB 用时 ${lastLoadMs}ms / 下载速度 $speed kbps / 码率约 $rate kbps"))
+            rows.add(DiagRow("加载状态", "加载中 ${if (pl.isLoading) "是" else "否"} / 缓冲余量 ${"%.1f".format(pl.totalBufferedDuration / 1000.0)}秒 / 直播延迟 ${pl.currentLiveOffset.let { if (it == C.TIME_UNSET) "无" else "%.1f秒".format(it / 1000.0) }}"))
+        }
         rows.add(DiagRow("DVB字幕包", "收到 ${PgsStats.dvbPackets} 个，其中无对齐标志 ${PgsStats.dvbUnaligned} 个"))
         fun sec(us: Long) = if (us < 0) "无" else "%.1f".format(us / 1e6)
         rows.add(DiagRow("字幕样本时间", "共 ${PgsStats.textCount} 个 / 首个 ${sec(PgsStats.textFirstUs)} / 最新 ${sec(PgsStats.textLastUs)} 秒 | 视频最新 ${sec(PgsStats.videoLastUs)} | 音频最新 ${sec(PgsStats.audioLastUs)} | 播放位置 ${"%.1f".format((player?.currentPosition ?: 0) / 1000.0)}"))
