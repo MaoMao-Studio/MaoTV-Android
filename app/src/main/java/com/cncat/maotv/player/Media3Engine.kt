@@ -136,7 +136,9 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         val ts = DefaultTrackSelector(appContext)
         ts.setParameters(ts.buildUponParameters()
             .setExceedRendererCapabilitiesIfNecessary(s.m3ExceedCaps)
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)   // 字幕：出现后由我们按设定选中
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)   // 字幕轨从“第一次选轨”就启用：中途才启用稀疏的字幕轨会让 Media3 重新定位 / 反复缓冲
+            .setPreferredTextLanguages(*TEXT_LANGS)
+            .setSelectUndeterminedTextLanguage(true)
             .build())
         trackSelector = ts
 
@@ -341,13 +343,17 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         resetSelection()
     }
 
+    private val TEXT_LANGS = arrayOf("zh", "zho", "chi", "cmn", "yue", "en", "eng", "ja", "jpn", "ko", "kor")
+
     private fun resetSelection() {
         subtitleHidden = false
         lastLoadError = null
         val ts = trackSelector ?: return
         ts.setParameters(ts.buildUponParameters()
             .clearOverrides()
-            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
+            .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
+            .setPreferredTextLanguages(*TEXT_LANGS)
+            .setSelectUndeterminedTextLanguage(true)
             .build())
     }
 
@@ -419,7 +425,8 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
 
         // 字幕轨一出现就选中第一条（用户自己选过 / 关闭过就不再自动选）
         val textDisabled = ts.parameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
-        if (applyDefaults && !userPickedSubtitle && textDisabled && tSorted.isNotEmpty()) {
+        val anyTextSelected = !textDisabled && tSorted.any { it.group.isTrackSelected(it.index) }
+        if (applyDefaults && !userPickedSubtitle && !anyTextSelected && tSorted.isNotEmpty()) {
             val first = tSorted.first()
             ts.setParameters(ts.buildUponParameters()
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
@@ -759,4 +766,3 @@ class MaoLoadControl(
         return super.shouldStartPlayback(parameters)
     }
 }
-
