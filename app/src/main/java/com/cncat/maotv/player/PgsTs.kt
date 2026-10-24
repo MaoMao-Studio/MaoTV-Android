@@ -42,11 +42,16 @@ object PgsStats {
     @Volatile var lastSetUs = -1L
     @Volatile var dropped = 0
     @Volatile var path = "?"
+    @Volatile var textCount = 0
+    @Volatile var textFirstUs = -1L
+    @Volatile var textLastUs = -1L
+    @Volatile var videoLastUs = -1L
+    @Volatile var audioLastUs = -1L
     private val seen = LinkedHashSet<String>()
     /** PMT 里出现过的流类型（0x1b=H264 0x24=H265 0x0f=AAC 0x06=私有数据 0x90=PGS ...） */
     fun note(s: String) { synchronized(seen) { seen.add(s) } }
     fun streams(): String = synchronized(seen) { seen.joinToString(" ") }
-    fun reset() { tracks = 0; bytes = 0; sets = 0; lastSetUs = -1; dropped = 0; path = "?"; synchronized(seen) { seen.clear() } }
+    fun reset() { tracks = 0; bytes = 0; sets = 0; lastSetUs = -1; dropped = 0; path = "?"; textCount = 0; textFirstUs = -1; textLastUs = -1; videoLastUs = -1; audioLastUs = -1; synchronized(seen) { seen.clear() } }
 }
 
 private class PgsTsReader(private val language: String?) : ElementaryStreamReader {
@@ -171,6 +176,22 @@ private class NoLengthInput(private val d: ExtractorInput) : ExtractorInput by d
  * 另外 HlsSampleStreamWrapper 对同一类型（音频）也只映射第一条，其余会被丢弃；
  * 这里把第 2 条起的音频以 TRACK_TYPE_UNKNOWN 上报，播放器就会为每条单独建一个采样队列，并按 MIME 当作音轨暴露。
  */
+/** 诊断用：统计各类样本的最新时间戳，用来比对字幕样本和视频样本的时间是否对得上 */
+private class CountingTrackOutput(private val d: TrackOutput, private val type: Int) : TrackOutput by d {
+    override fun sampleMetadata(timeUs: Long, flags: Int, size: Int, offset: Int, cryptoData: TrackOutput.CryptoData?) {
+        when (type) {
+            C.TRACK_TYPE_TEXT -> {
+                PgsStats.textCount++
+                if (PgsStats.textFirstUs < 0) PgsStats.textFirstUs = timeUs
+                PgsStats.textLastUs = timeUs
+            }
+            C.TRACK_TYPE_VIDEO -> PgsStats.videoLastUs = timeUs
+            C.TRACK_TYPE_AUDIO -> PgsStats.audioLastUs = timeUs
+        }
+        d.sampleMetadata(timeUs, flags, size, offset, cryptoData)
+    }
+}
+
 class MultiAudioTsExtractor(
     private val ts: TsExtractor,
     private val mainAudioId: java.util.concurrent.atomic.AtomicInteger,
@@ -185,7 +206,8 @@ class MultiAudioTsExtractor(
                     mainAudioId.compareAndSet(-1, id)
                     if (id != mainAudioId.get()) t = C.TRACK_TYPE_UNKNOWN
                 }
-                return output.track(id, t)
+                val o = output.track(id, t)
+                return if (type == C.TRACK_TYPE_TEXT || type == C.TRACK_TYPE_VIDEO || t == C.TRACK_TYPE_AUDIO) CountingTrackOutput(o, type) else o
             }
             override fun endTracks() = output.endTracks()
             override fun seekMap(seekMap: androidx.media3.extractor.SeekMap) = output.seekMap(seekMap)
