@@ -34,6 +34,16 @@ import androidx.media3.extractor.text.SubtitleParser
  * 这里补一个读取器：把 PES 里的 PGS 分段攒成完整的“显示集”（以 END 分段 0x80 结尾），
  * 作为 application/pgs 的字幕样本交给 Media3（它自带 PGS 解码，位图字幕由 SubtitleView 显示）。
  */
+/** 诊断用计数：PGS 读取器一共收到多少字节、凑出多少个完整显示集 */
+object PgsStats {
+    @Volatile var tracks = 0
+    @Volatile var bytes = 0L
+    @Volatile var sets = 0
+    @Volatile var lastSetUs = -1L
+    @Volatile var dropped = 0
+    fun reset() { tracks = 0; bytes = 0; sets = 0; lastSetUs = -1; dropped = 0 }
+}
+
 private class PgsTsReader(private val language: String?) : ElementaryStreamReader {
     private var output: TrackOutput? = null
     private var buf = ByteArray(64 * 1024)
@@ -48,6 +58,7 @@ private class PgsTsReader(private val language: String?) : ElementaryStreamReade
 
     override fun createTracks(extractorOutput: ExtractorOutput, idGenerator: TsPayloadReader.TrackIdGenerator) {
         idGenerator.generateNewId()
+        PgsStats.tracks++
         val out = extractorOutput.track(idGenerator.trackId, C.TRACK_TYPE_TEXT)
         out.format(
             Format.Builder()
@@ -67,7 +78,8 @@ private class PgsTsReader(private val language: String?) : ElementaryStreamReade
     override fun consume(data: ParsableByteArray) {
         val n = data.bytesLeft()
         if (n <= 0) return
-        if (size + n > MAX_BYTES) { size = 0; sampleTimeUs = pesTimeUs; return }   // 异常数据：丢弃重来
+        PgsStats.bytes += n
+        if (size + n > MAX_BYTES) { PgsStats.dropped++; size = 0; sampleTimeUs = pesTimeUs; return }   // 异常数据：丢弃重来
         if (size + n > buf.size) buf = buf.copyOf(maxOf(buf.size * 2, size + n))
         data.readBytes(buf, size, n)
         size += n
@@ -88,6 +100,8 @@ private class PgsTsReader(private val language: String?) : ElementaryStreamReade
             val sample = ParsableByteArray(buf, size)
             out.sampleData(sample, size)
             out.sampleMetadata(sampleTimeUs, C.BUFFER_FLAG_KEY_FRAME, size, 0, null)
+            PgsStats.sets++
+            PgsStats.lastSetUs = sampleTimeUs
             size = 0
             sampleTimeUs = C.TIME_UNSET
         }
