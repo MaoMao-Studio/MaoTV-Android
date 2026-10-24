@@ -480,12 +480,19 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
     // ───────────── 监听 ─────────────
 
     private val listener = object : Player.Listener {
+        override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+            if (timeline.isEmpty) return
+            val w = timeline.getWindow(0, androidx.media3.common.Timeline.Window())
+            ev("时间线 live=${w.liveConfiguration != null} 窗口${if (w.durationUs == C.TIME_UNSET) "?" else "%.0f".format(w.durationUs / 1e6)}s 默认起播${"%.0f".format(w.defaultPositionUs / 1e6)}s")
+        }
+
         override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
             ev("位置跳变 原因$reason ${oldPosition.positionMs / 1000}→${newPosition.positionMs / 1000}秒")
         }
 
         override fun onPlaybackStateChanged(state: Int) {
-            ev("状态 " + when (state) { Player.STATE_BUFFERING -> "缓冲"; Player.STATE_READY -> "就绪"; Player.STATE_ENDED -> "结束"; else -> "空闲" })
+            ev("状态 " + when (state) { Player.STATE_BUFFERING -> "缓冲"; Player.STATE_READY -> "就绪"; Player.STATE_ENDED -> "结束"; else -> "空闲" } +
+                (player?.let { " 位置${"%.1f".format(it.currentPosition / 1000.0)} 余量${"%.1f".format(it.totalBufferedDuration / 1000.0)}" } ?: ""))
             when (state) {
                 Player.STATE_BUFFERING -> onEvent?.invoke(EngineEvent.Loading)
                 Player.STATE_READY -> onEvent?.invoke(EngineEvent.Playing)
@@ -641,7 +648,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
     private fun ev(s: String) {
         synchronized(evlog) {
             evlog.addLast("%.1fs %s".format((android.os.SystemClock.elapsedRealtime() - t0) / 1000.0, s))
-            while (evlog.size > 14) evlog.removeFirst()
+            while (evlog.size > 22) evlog.removeFirst()
         }
     }
     @Volatile private var loadCount = 0
