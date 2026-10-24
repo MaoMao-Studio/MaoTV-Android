@@ -17,6 +17,7 @@ import androidx.media3.extractor.ExtractorsFactory
 import androidx.media3.extractor.TrackOutput
 import androidx.media3.extractor.text.DefaultSubtitleParserFactory
 import androidx.media3.extractor.ts.DefaultTsPayloadReaderFactory
+import androidx.media3.extractor.ts.DvbSubtitleReader
 import androidx.media3.extractor.ts.ElementaryStreamReader
 import androidx.media3.extractor.ts.PesReader
 import androidx.media3.extractor.ts.TsExtractor
@@ -42,6 +43,8 @@ object PgsStats {
     @Volatile var lastSetUs = -1L
     @Volatile var dropped = 0
     @Volatile var path = "?"
+    @Volatile var dvbPackets = 0
+    @Volatile var dvbUnaligned = 0
     @Volatile var textCount = 0
     @Volatile var textFirstUs = -1L
     @Volatile var textLastUs = -1L
@@ -51,7 +54,7 @@ object PgsStats {
     /** PMT 里出现过的流类型（0x1b=H264 0x24=H265 0x0f=AAC 0x06=私有数据 0x90=PGS ...） */
     fun note(s: String) { synchronized(seen) { seen.add(s) } }
     fun streams(): String = synchronized(seen) { seen.joinToString(" ") }
-    fun reset() { tracks = 0; bytes = 0; sets = 0; lastSetUs = -1; dropped = 0; path = "?"; textCount = 0; textFirstUs = -1; textLastUs = -1; videoLastUs = -1; audioLastUs = -1; synchronized(seen) { seen.clear() } }
+    fun reset() { tracks = 0; bytes = 0; sets = 0; lastSetUs = -1; dropped = 0; path = "?"; dvbPackets = 0; dvbUnaligned = 0; textCount = 0; textFirstUs = -1; textLastUs = -1; videoLastUs = -1; audioLastUs = -1; synchronized(seen) { seen.clear() } }
 }
 
 private class PgsTsReader(private val language: String?) : ElementaryStreamReader {
@@ -123,6 +126,18 @@ private class PgsTsReader(private val language: String?) : ElementaryStreamReade
     }
 }
 
+/**
+ * Media3 的 DVB 字幕读取器只处理 PES 头里带“数据对齐标志”的包，很多 IPTV 源不设这个标志，结果一个字幕样本都不出。
+ * 这里在包装里强制带上该标志（VLC 不在乎这个标志，所以 VLC 能显示）。
+ */
+private class ForceAlignedReader(private val d: ElementaryStreamReader) : ElementaryStreamReader by d {
+    override fun packetStarted(pesTimeUs: Long, flags: Int) {
+        PgsStats.dvbPackets++
+        if ((flags and TsPayloadReader.FLAG_DATA_ALIGNMENT_INDICATOR) == 0) PgsStats.dvbUnaligned++
+        d.packetStarted(pesTimeUs, flags or TsPayloadReader.FLAG_DATA_ALIGNMENT_INDICATOR)
+    }
+}
+
 /** 在默认的 TS 读取器基础上加上 PGS（流类型 0x90） */
 private class PgsAwareReaderFactory(flags: Int, captions: List<Format> = emptyList()) : TsPayloadReader.Factory {
     private val base = DefaultTsPayloadReaderFactory(flags, captions)
@@ -136,10 +151,12 @@ private class PgsAwareReaderFactory(flags: Int, captions: List<Format> = emptyLi
 
     private fun createReader(streamType: Int, esInfo: TsPayloadReader.EsInfo): TsPayloadReader? =
         if (streamType == STREAM_TYPE_PGS) PesReader(PgsTsReader(esInfo.language))
+        else if (streamType == STREAM_TYPE_DVBSUBS) PesReader(ForceAlignedReader(DvbSubtitleReader(esInfo.dvbSubtitleInfos)))
         else base.createPayloadReader(streamType, esInfo)
 
     private companion object {
         const val STREAM_TYPE_PGS = 0x90
+        const val STREAM_TYPE_DVBSUBS = 0x59
     }
 }
 

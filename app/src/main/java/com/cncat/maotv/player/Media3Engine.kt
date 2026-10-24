@@ -712,6 +712,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         lastErrorText?.let { rows.add(DiagRow("最近播放器错误", it)) }
         lastLoadError?.let { rows.add(DiagRow("最近加载错误", it)) }
         rows.add(DiagRow("TS流类型", "${PgsStats.path} / ${PgsStats.streams().ifEmpty { "无" }}"))
+        rows.add(DiagRow("DVB字幕包", "收到 ${PgsStats.dvbPackets} 个，其中无对齐标志 ${PgsStats.dvbUnaligned} 个"))
         fun sec(us: Long) = if (us < 0) "无" else "%.1f".format(us / 1e6)
         rows.add(DiagRow("字幕样本时间", "共 ${PgsStats.textCount} 个 / 首个 ${sec(PgsStats.textFirstUs)} / 最新 ${sec(PgsStats.textLastUs)} 秒 | 视频最新 ${sec(PgsStats.videoLastUs)} | 音频最新 ${sec(PgsStats.audioLastUs)} | 播放位置 ${"%.1f".format((player?.currentPosition ?: 0) / 1000.0)}"))
         synchronized(evlog) { evlog.forEachIndexed { i, e -> rows.add(DiagRow("事件${i + 1}", e)) } }
@@ -766,3 +767,4 @@ class MaoLoadControl(
         return super.shouldStartPlayback(parameters)
     }
 }
+
