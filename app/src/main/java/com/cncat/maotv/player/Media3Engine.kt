@@ -340,6 +340,8 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
     }
 
     private fun resetSelection() {
+        subtitleHidden = false
+        lastLoadError = null
         val ts = trackSelector ?: return
         ts.setParameters(ts.buildUponParameters()
             .clearOverrides()
@@ -422,7 +424,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
                 .setOverrideForType(TrackSelectionOverride(first.group.mediaTrackGroup, first.index))
                 .build())
         }
-        val textOn = !ts.parameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
+        val textOn = !ts.parameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT) && !subtitleHidden
 
         lastTracks = EngineTracks(
             audio = aOrd.mapIndexed { i, (idx, n) ->
@@ -448,18 +450,21 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
     override fun selectSubtitle(index: Int?) {
         val ts = trackSelector ?: return
         val r = if (index != null) textRefs.getOrNull(index) else null
-        ts.setParameters(if (r == null) {
-            ts.buildUponParameters()
-                .clearOverridesOfType(C.TRACK_TYPE_TEXT)
-                .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, true)
-                .build()
-        } else {
+        if (r == null) {
+            // 关闭 = 只隐藏；轨道保持选中，之后再打开不会触发重新拉流
+            subtitleHidden = true
+            subtitleView?.setCues(emptyList())
+            return
+        }
+        subtitleHidden = false
+        val textEnabled = !ts.parameters.disabledTrackTypes.contains(C.TRACK_TYPE_TEXT)
+        if (textEnabled && r.group.isTrackSelected(r.index)) return   // 已经选中：直接显示即可
+        ts.setParameters(run {
             ts.buildUponParameters()
                 .setTrackTypeDisabled(C.TRACK_TYPE_TEXT, false)
                 .setOverrideForType(TrackSelectionOverride(r.group.mediaTrackGroup, r.index))
                 .build()
         })
-        if (r == null) subtitleView?.setCues(emptyList())
     }
 
     // ───────────── 监听 ─────────────
@@ -495,6 +500,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
 
         override fun onCues(cueGroup: CueGroup) {
             val sv = subtitleView ?: return
+            if (subtitleHidden) { sv.setCues(emptyList()); return }
             val em = SubtitleStyle.LETTER_SPACING_PX / SubtitleStyle.SIZE_PX
             val out = cueGroup.cues.map { cue ->
                 val t = cue.text
@@ -529,6 +535,10 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
                     append(" | ").append(c.javaClass.simpleName).append(": ").append((c.message ?: "").take(80))
                     c = c.cause; n++
                 }
+                // 最深一层异常的抛出位置（区分“首次解析失败”还是“重连后失败”）
+                var d: Throwable = error
+                while (d.cause != null && d.cause !== d) d = d.cause!!
+                d.stackTrace.take(3).forEach { append(" @").append(it.className.substringAfterLast('.')).append('.').append(it.methodName) }
             }
             val code = error.errorCode
 
@@ -581,7 +591,20 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         override fun onAudioDecoderInitialized(
             eventTime: AnalyticsListener.EventTime, decoderName: String, initializedTimestampMs: Long, initializationDurationMs: Long,
         ) { audioDecoderName = decoderName }
+
+        override fun onLoadError(
+            eventTime: AnalyticsListener.EventTime,
+            loadEventInfo: androidx.media3.exoplayer.source.LoadEventInfo,
+            mediaLoadData: androidx.media3.exoplayer.source.MediaLoadData,
+            error: java.io.IOException,
+            wasCanceled: Boolean,
+        ) {
+            lastLoadError = "${error.javaClass.simpleName}: ${(error.message ?: "").take(60)} | 已读 ${loadEventInfo.bytesLoaded} 字节 | ${loadEventInfo.uri.host}"
+        }
     }
+    @Volatile private var lastLoadError: String? = null
+    /** 字幕“关闭”只隐藏、不取消选中轨道：新启用从未读取过的稀疏轨（PGS）会让 Media3 重新拉流 */
+    @Volatile private var subtitleHidden = false
 
     // ───────────── 诊断 ─────────────
 
@@ -655,6 +678,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         }
         if (p != null) rows.add(DiagRow("缓冲余量", String.format(Locale.US, "%.1f 秒", p.totalBufferedDuration / 1000.0)))
         lastErrorText?.let { rows.add(DiagRow("最近播放器错误", it)) }
+        lastLoadError?.let { rows.add(DiagRow("最近加载错误", it)) }
         return rows
     }
 
