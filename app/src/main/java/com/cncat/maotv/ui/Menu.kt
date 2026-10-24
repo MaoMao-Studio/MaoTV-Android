@@ -427,7 +427,10 @@ fun ChannelList(
                 val idx = shown.indexOf(ch)
                 val dragged = drag.key == ch.id
                 val selected = ch.id == currentId
-                val animMod = if (dragged) Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = null)
+                // 位移动画：触屏 / 鼠标操作和“我的收藏”拖动排序时保留；遥控器 / 键盘逐项移动时关闭
+                // （那时每次按键都在做“居中滚动”，两种动画叠在一起，列表尾部就会抖动）
+                val keepPlacement = !dragged && (reorderable || !ui.remoteActive)
+                val animMod = if (!keepPlacement) Modifier.animateItem(fadeInSpec = null, placementSpec = null, fadeOutSpec = null)
                 else Modifier.animateItem(fadeInSpec = null, fadeOutSpec = null)
                 // 遥控器 / 键盘操作时：高亮条跟着焦点走（焦点所在行高亮，正在播放的那行不再单独高亮）；触屏仍高亮正在播放的频道
                 val inMenu = !ui.portrait
