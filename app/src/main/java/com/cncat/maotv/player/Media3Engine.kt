@@ -166,6 +166,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
 
     private fun destroyPlayer() {
         val p = player ?: return
+        stallHandler.removeCallbacks(stallCheck)
         playerView?.player = null
         try { p.removeListener(listener); p.release() } catch (e: Throwable) { Log.w(TAG, "release", e) }
         player = null
@@ -259,7 +260,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         loadControl?.fastStart = guessKind(url) == Kind.HLS
         lastErrorText = null
         t0 = android.os.SystemClock.elapsedRealtime(); synchronized(evlog) { evlog.clear() }
-        loadCount = 0; PgsStats.reset(); cueCallbacks = 0; lastCueCount = 0; lastCueBitmap = false
+        loadCount = 0; stallRescues = 0; stallHandler.removeCallbacks(stallCheck); PgsStats.reset(); cueCallbacks = 0; lastCueCount = 0; lastCueBitmap = false
         hints = M3u8Hints.EMPTY
         val seq = hintSeq.incrementAndGet()
         M3u8Hints.fetch(url) { h ->
@@ -486,11 +487,25 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
             ev("时间线 live=${w.liveConfiguration != null} 窗口${if (w.durationUs == C.TIME_UNSET) "?" else "%.0f".format(w.durationUs / 1e6)}s 默认起播${"%.0f".format(w.defaultPositionUs / 1e6)}s")
         }
 
+        override fun onTimelineChanged(timeline: androidx.media3.common.Timeline, reason: Int) {
+            if (timeline.isEmpty) return
+            val w = androidx.media3.common.Timeline.Window()
+            timeline.getWindow(0, w)
+            val dur = if (w.durationMs == C.TIME_UNSET) "?" else "${w.durationMs / 1000}"
+            ev("时间线 ${if (w.isDynamic) "动态" else "静态"} 窗口${dur}s 默认起点${w.defaultPositionMs / 1000}s 原因$reason")
+        }
+
+        override fun onIsLoadingChanged(isLoading: Boolean) {
+            ev(if (isLoading) "加载开始" else "加载停止")
+        }
+
         override fun onPositionDiscontinuity(oldPosition: Player.PositionInfo, newPosition: Player.PositionInfo, reason: Int) {
             ev("位置跳变 原因$reason ${oldPosition.positionMs / 1000}→${newPosition.positionMs / 1000}秒")
         }
 
         override fun onPlaybackStateChanged(state: Int) {
+            stallHandler.removeCallbacks(stallCheck)
+            if (state == Player.STATE_BUFFERING) stallHandler.postDelayed(stallCheck, 6000)
             ev("状态 " + when (state) { Player.STATE_BUFFERING -> "缓冲"; Player.STATE_READY -> "就绪"; Player.STATE_ENDED -> "结束"; else -> "空闲" } +
                 (player?.let { " 位置${"%.1f".format(it.currentPosition / 1000.0)} 余量${"%.1f".format(it.totalBufferedDuration / 1000.0)}" } ?: ""))
             when (state) {
@@ -643,6 +658,27 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         }
     }
     @Volatile private var lastLoadError: String? = null
+    // 卡死自救：缓冲状态持续 6 秒以上、缓冲余量却很充足（HLS），说明不是缺数据而是视频解码链路卡住了 → 在原位置重新定位一次（冲刷解码器），最多 3 次
+    private val stallHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    @Volatile private var stallRescues = 0
+    private val stallCheck = Runnable {
+        val p = player ?: return@Runnable
+        if (p.playbackState == Player.STATE_BUFFERING && loadControl?.fastStart == true &&
+            p.totalBufferedDuration > 3000 && stallRescues < 3) {
+            stallRescues++
+            ev("卡死自救#$stallRescues 缓冲余量${p.totalBufferedDuration / 1000}s → 原位重新定位")
+            try { p.seekTo(p.currentPosition) } catch (_: Throwable) { }
+        }
+    }
+
+    /** 本进程最近的警告 / 错误日志（解码器、渲染器的报错通常在这里），诊断页显示 */
+    private fun recentLogs(): List<String> = try {
+        val proc = Runtime.getRuntime().exec(arrayOf("logcat", "-d", "-v", "brief", "-t", "400", "*:W"))
+        val lines = proc.inputStream.bufferedReader().readLines()
+        proc.destroy()
+        lines.filter { it.length > 3 && (it[0] == 'W' || it[0] == 'E') && it[1] == '/' }.takeLast(10).map { it.take(130) }
+    } catch (_: Throwable) { emptyList() }
+
     private val evlog = java.util.ArrayDeque<String>()
     @Volatile private var t0 = 0L
     private fun ev(s: String) {
@@ -742,6 +778,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
             rows.add(DiagRow("分片下载", "共 $loadCount 个 / 最近 ${lastLoadBytes / 1024}KB 用时 ${lastLoadMs}ms / 下载速度 $speed kbps / 码率约 $rate kbps"))
             rows.add(DiagRow("加载状态", "加载中 ${if (pl.isLoading) "是" else "否"} / 缓冲余量 ${"%.1f".format(pl.totalBufferedDuration / 1000.0)}秒 / 直播延迟 ${pl.currentLiveOffset.let { if (it == C.TIME_UNSET) "无" else "%.1f秒".format(it / 1000.0) }}"))
         }
+        recentLogs().forEachIndexed { i, l -> rows.add(DiagRow("日志${i + 1}", l)) }
         rows.add(DiagRow("DVB字幕包", "收到 ${PgsStats.dvbPackets} 个，其中无对齐标志 ${PgsStats.dvbUnaligned} 个"))
         fun sec(us: Long) = if (us < 0) "无" else "%.1f".format(us / 1e6)
         rows.add(DiagRow("字幕样本时间", "共 ${PgsStats.textCount} 个 / 首个 ${sec(PgsStats.textFirstUs)} / 最新 ${sec(PgsStats.textLastUs)} 秒 | 视频最新 ${sec(PgsStats.videoLastUs)} | 音频最新 ${sec(PgsStats.audioLastUs)} | 播放位置 ${"%.1f".format((player?.currentPosition ?: 0) / 1000.0)}"))
@@ -797,4 +834,3 @@ class MaoLoadControl(
         return super.shouldStartPlayback(parameters)
     }
 }
-
