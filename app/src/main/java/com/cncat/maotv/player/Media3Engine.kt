@@ -255,6 +255,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         resetSelection()
         // m3u8 能拿到“未来数据”：约 1 秒就起播，之后继续缓存；TS 等连续流：缓存到设定值再起播
         loadControl?.fastStart = guessKind(url) == Kind.HLS
+        lastErrorText = null
         hints = M3u8Hints.EMPTY
         val seq = hintSeq.incrementAndGet()
         M3u8Hints.fetch(url) { h ->
@@ -268,6 +269,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
     @Volatile private var hints: M3u8Hints = M3u8Hints.EMPTY
     private val hintSeq = java.util.concurrent.atomic.AtomicInteger(0)
     private var loadControl: MaoLoadControl? = null
+    @Volatile private var lastErrorText: String? = null
 
     private fun open(p: ExoPlayer, kind: Kind) {
         triedKinds.add(kind)
@@ -514,6 +516,20 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
         override fun onPlayerError(error: PlaybackException) {
             val p = player ?: return
             Log.w(TAG, "播放错误 ${error.errorCodeName}", error)
+            // 记下最近一次错误，显示在诊断页（排查 PGS 等字幕问题用）
+            lastErrorText = buildString {
+                append(error.errorCodeName)
+                (error as? ExoPlaybackException)?.let { e ->
+                    append(" / type=").append(e.type)
+                    e.rendererFormat?.sampleMimeType?.let { append(" / ").append(it) }
+                }
+                var c: Throwable? = error
+                var n = 0
+                while (c != null && n < 3) {
+                    append(" | ").append(c.javaClass.simpleName).append(": ").append((c.message ?: "").take(80))
+                    c = c.cause; n++
+                }
+            }
             val code = error.errorCode
 
             // 直播窗口落后（缓冲耗尽后的追赶）：原地重新准备
@@ -638,6 +654,7 @@ class Media3Engine(private val appContext: Context) : PlaybackEngine {
             rows.add(DiagRow("丢帧", "${dc.droppedBufferCount}"))
         }
         if (p != null) rows.add(DiagRow("缓冲余量", String.format(Locale.US, "%.1f 秒", p.totalBufferedDuration / 1000.0)))
+        lastErrorText?.let { rows.add(DiagRow("最近播放器错误", it)) }
         return rows
     }
 
